@@ -1,0 +1,6 @@
+services:
+  garmin-sleep:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/data
