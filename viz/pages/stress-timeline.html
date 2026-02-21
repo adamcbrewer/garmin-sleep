@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stress – Sleep Timeline — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .controls { align-items: center; }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Stress – Sleep <em>Timeline</em>',
+      'Dual-panel view correlating sleep composition with overnight stress and body battery recovery across all nights.',
+      'Comparative'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="stats-row" id="stats-row"></div>
+      <div class="controls" id="controls">
+        <button class="control-btn active" data-smooth="0">Raw</button>
+        <button class="control-btn" data-smooth="7">7-day avg</button>
+        <button class="control-btn" data-smooth="14">14-day avg</button>
+      </div>
+      <div class="viz-container">
+        <div class="viz-canvas" id="canvas"><div class="loading">Loading sleep data</div></div>
+        <div class="legend" id="legend"></div>
+      </div>
+    `;
+
+    let smoothWindow = 0;
+
+    document.getElementById('controls').addEventListener('click', e => {
+      const btn = e.target.closest('.control-btn');
+      if (!btn) return;
+      document.querySelectorAll('#controls .control-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      smoothWindow = +btn.dataset.smooth;
+      render();
+    });
+
+    loadData('summary.json').then(summary => {
+      summary.forEach(d => {
+        d._date = new Date(d.date + 'T12:00:00');
+        d.deepPct = d.totalSleep > 0 ? d.deep / d.totalSleep : 0;
+        d.lightPct = d.totalSleep > 0 ? d.light / d.totalSleep : 0;
+        d.remPct = d.totalSleep > 0 ? d.rem / d.totalSleep : 0;
+        d.totalSleepH = d.totalSleep / 3600;
+        d.deepH = d.deep / 3600;
+        d.lightH = d.light / 3600;
+        d.remH = d.rem / 3600;
+      });
+      summary.sort((a, b) => a._date - b._date);
+
+      const validStress = summary.filter(d => d.avgStress != null);
+      const avgSleep = d3.mean(summary, d => d.totalSleepH);
+      const avgDeep = d3.mean(summary, d => d.deepH);
+      const avgStress = validStress.length ? d3.mean(validStress, d => d.avgStress) : null;
+      const avgBattery = d3.mean(summary.filter(d => d.bodyBatteryChange != null), d => d.bodyBatteryChange);
+
+      document.getElementById('stats-row').innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${avgSleep.toFixed(1)}h</div>
+          <div class="stat-label">Avg Sleep</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgDeep.toFixed(1)}h</div>
+          <div class="stat-label">Avg Deep</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgStress != null ? Math.round(avgStress) : '—'}</div>
+          <div class="stat-label">Avg Stress</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgBattery != null ? (avgBattery >= 0 ? '+' : '') + Math.round(avgBattery) : '—'}</div>
+          <div class="stat-label">Avg Battery Δ</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${summary.length}</div>
+          <div class="stat-label">Nights</div>
+        </div>
+      `;
+
+      function movingAvg(arr, key, window) {
+        if (!window) return arr.map(d => d[key]);
+        return arr.map((_, i) => {
+          const lo = Math.max(0, i - Math.floor(window / 2));
+          const hi = Math.min(arr.length, i + Math.ceil(window / 2));
+          const slice = arr.slice(lo, hi).map(d => d[key]).filter(v => v != null);
+          return slice.length ? d3.mean(slice) : null;
+        });
+      }
+
+      function render() {
+        const canvas = document.getElementById('canvas');
+        canvas.innerHTML = '';
+
+        const WIDTH = 1400;
+        const topH = 260;
+        const bottomH = 180;
+        const midGap = 40;
+        const HEIGHT = topH + midGap + bottomH + 80;
+        const margin = { top: 30, right: 20, bottom: 35, left: 55 };
+
+        const { svg, g, innerWidth } = createSVG('#canvas', WIDTH, HEIGHT, margin);
+
+        const x = d3.scaleBand()
+          .domain(summary.map(d => d.date))
+          .range([0, innerWidth])
+          .padding(0.15);
+
+        const totalSmooth = movingAvg(summary, 'totalSleepH', smoothWindow);
+        const deepSmooth = movingAvg(summary, 'deepH', smoothWindow);
+        const lightSmooth = movingAvg(summary, 'lightH', smoothWindow);
+        const remSmooth = movingAvg(summary, 'remH', smoothWindow);
+        const stressSmooth = movingAvg(summary, 'avgStress', smoothWindow);
+        const batterySmooth = movingAvg(summary, 'bodyBatteryChange', smoothWindow);
+
+        const maxSleep = d3.max(totalSmooth.filter(v => v != null)) || 10;
+        const ySleep = d3.scaleLinear().domain([0, maxSleep * 1.1]).range([topH, 0]);
+
+        const maxStress = d3.max(stressSmooth.filter(v => v != null)) || 50;
+        const yStress = d3.scaleLinear().domain([0, maxStress * 1.2]).range([topH + midGap, topH + midGap + bottomH]);
+
+        const maxBattery = d3.max(batterySmooth.filter(v => v != null && Math.abs(v) > 0).map(v => Math.abs(v))) || 70;
+        const yBattery = d3.scaleLinear().domain([0, maxBattery * 1.2]).range([topH + midGap, topH + midGap + bottomH]);
+
+        const tickInterval = Math.max(1, Math.floor(summary.length / 20));
+        const xAxis = d3.axisBottom(x)
+          .tickValues(summary.filter((_, i) => i % tickInterval === 0).map(d => d.date))
+          .tickFormat(d => formatDate(d));
+        g.append('g')
+          .attr('class', 'axis')
+          .attr('transform', `translate(0,${topH + midGap + bottomH})`)
+          .call(xAxis)
+          .selectAll('text')
+          .attr('transform', 'rotate(-45)')
+          .attr('text-anchor', 'end');
+
+        const ySleepAxis = d3.axisLeft(ySleep).ticks(5).tickFormat(d => d + 'h');
+        g.append('g').attr('class', 'axis').call(ySleepAxis)
+          .call(g => g.selectAll('.tick line').clone()
+            .attr('class', 'grid').attr('x2', innerWidth).attr('stroke-opacity', 0.1));
+
+        const yStressAxis = d3.axisLeft(yStress).ticks(4).tickFormat(d => d);
+        g.append('g').attr('class', 'axis').call(yStressAxis);
+
+        g.append('text').attr('x', -10).attr('y', -8)
+          .attr('text-anchor', 'end').attr('fill', 'var(--text-dim)')
+          .attr('font-size', '10px').attr('font-family', 'var(--font-mono)')
+          .text('Sleep (hours)');
+
+        g.append('text').attr('x', -10).attr('y', topH + midGap - 8)
+          .attr('text-anchor', 'end').attr('fill', 'var(--text-dim)')
+          .attr('font-size', '10px').attr('font-family', 'var(--font-mono)')
+          .text('Stress / Battery');
+
+        g.append('line')
+          .attr('x1', 0).attr('x2', innerWidth)
+          .attr('y1', topH + midGap / 2).attr('y2', topH + midGap / 2)
+          .attr('stroke', 'var(--border)').attr('stroke-width', 0.5);
+
+        summary.forEach((d, i) => {
+          const deepVal = deepSmooth[i];
+          const lightVal = lightSmooth[i];
+          const remVal = remSmooth[i];
+          const totalVal = totalSmooth[i];
+          if (totalVal == null) return;
+
+          const bw = x.bandwidth();
+          const cx = x(d.date);
+
+          let y0 = ySleep(0);
+          const deepH = y0 - ySleep(deepVal);
+          g.append('rect')
+            .attr('x', cx).attr('y', ySleep(deepVal))
+            .attr('width', bw).attr('height', deepH)
+            .attr('fill', 'var(--deep)').attr('opacity', 0.9);
+
+          const lightBase = deepVal;
+          const lightTop = lightBase + lightVal;
+          g.append('rect')
+            .attr('x', cx).attr('y', ySleep(lightTop))
+            .attr('width', bw).attr('height', ySleep(lightBase) - ySleep(lightTop))
+            .attr('fill', 'var(--light)').attr('opacity', 0.7);
+
+          const remBase = lightTop;
+          const remTop = remBase + remVal;
+          g.append('rect')
+            .attr('x', cx).attr('y', ySleep(remTop))
+            .attr('width', bw).attr('height', ySleep(remBase) - ySleep(remTop))
+            .attr('fill', 'var(--rem)').attr('opacity', 0.7);
+        });
+
+        summary.forEach((d, i) => {
+          const sv = stressSmooth[i];
+          if (sv == null) return;
+          const bw = x.bandwidth();
+          const cx = x(d.date);
+
+          g.append('rect')
+            .attr('x', cx).attr('y', topH + midGap)
+            .attr('width', bw).attr('height', yStress(0) - yStress(sv))
+            .attr('fill', 'var(--stress-color)').attr('opacity', 0.6);
+        });
+
+        summary.forEach((d, i) => {
+          const bv = batterySmooth[i];
+          if (bv == null) return;
+          const cx = x(d.date) + x.bandwidth() / 2;
+
+          let color;
+          if (bv > 30) color = 'var(--success)';
+          else if (bv >= 10) color = 'var(--warning)';
+          else color = 'var(--danger)';
+
+          const topY = topH;
+          const bottomY = topH + midGap;
+
+          g.append('line')
+            .attr('x1', cx).attr('x2', cx)
+            .attr('y1', topY).attr('y2', bottomY)
+            .attr('stroke', color).attr('stroke-width', 1).attr('opacity', 0.4);
+        });
+
+        if (smoothWindow > 0) {
+          const totalLine = d3.line()
+            .defined((_, i) => totalSmooth[i] != null)
+            .x((_, i) => x(summary[i].date) + x.bandwidth() / 2)
+            .y((_, i) => ySleep(totalSmooth[i]))
+            .curve(d3.curveMonotoneX);
+          g.append('path').datum(summary).attr('fill', 'none')
+            .attr('stroke', 'var(--text)').attr('stroke-width', 1.5).attr('opacity', 0.7)
+            .attr('d', totalLine);
+
+          const stressLine = d3.line()
+            .defined((_, i) => stressSmooth[i] != null)
+            .x((_, i) => x(summary[i].date) + x.bandwidth() / 2)
+            .y((_, i) => yStress(stressSmooth[i]))
+            .curve(d3.curveMonotoneX);
+          g.append('path').datum(summary).attr('fill', 'none')
+            .attr('stroke', 'var(--stress-color)').attr('stroke-width', 1.5)
+            .attr('stroke-dasharray', '4,2').attr('d', stressLine);
+        }
+
+        const tooltip = createTooltip(document.querySelector('.viz-container'));
+        const overlay = g.append('rect')
+          .attr('width', innerWidth).attr('height', topH + midGap + bottomH)
+          .attr('fill', 'none').attr('pointer-events', 'all');
+
+        const hoverLine = g.append('line')
+          .attr('y1', 0).attr('y2', topH + midGap + bottomH)
+          .attr('stroke', 'var(--text-dim)').attr('stroke-width', 0.5)
+          .attr('stroke-dasharray', '3,3').style('display', 'none');
+
+        overlay.on('mousemove', function(event) {
+          const [mx] = d3.pointer(event);
+          const bandwidth = x.bandwidth();
+          const step = x.step();
+          const idx = Math.floor(mx / step);
+          if (idx < 0 || idx >= summary.length) { tooltip.hide(); hoverLine.style('display', 'none'); return; }
+
+          const d = summary[idx];
+          const cx = x(d.date) + bandwidth / 2;
+          hoverLine.style('display', null).attr('x1', cx).attr('x2', cx);
+
+          const stressVal = stressSmooth[idx];
+          const batteryVal = batterySmooth[idx];
+
+          const containerRect = document.querySelector('.viz-container').getBoundingClientRect();
+          const svgRect = svg.node().getBoundingClientRect();
+          const sx = svgRect.width / WIDTH;
+          const px = svgRect.left - containerRect.left + (margin.left + cx) * sx;
+          const py = svgRect.top - containerRect.top + (margin.top + ySleep(totalSmooth[idx] || 0)) * sx;
+
+          tooltip.show(
+            `<div class="tooltip-label">${formatDateLong(d.date)}</div>
+             <div class="tooltip-value">Sleep: ${formatDuration(d.totalSleep)}</div>
+             <div style="font-size:0.65rem;color:var(--deep-bright)">Deep ${formatDuration(d.deep)}</div>
+             <div style="font-size:0.65rem;color:var(--light-bright)">Light ${formatDuration(d.light)}</div>
+             <div style="font-size:0.65rem;color:var(--rem-bright)">REM ${formatDuration(d.rem)}</div>
+             ${stressVal != null ? `<div class="tooltip-value" style="color:var(--stress-color)">Stress: ${Math.round(stressVal)}</div>` : ''}
+             ${batteryVal != null ? `<div class="tooltip-value" style="color:var(--battery-color)">Battery Δ: ${batteryVal >= 0 ? '+' : ''}${Math.round(batteryVal)}</div>` : ''}`,
+            px, py
+          );
+        });
+
+        overlay.on('mouseleave', () => { tooltip.hide(); hoverLine.style('display', 'none'); });
+      }
+
+      document.getElementById('legend').innerHTML = `
+        <div class="legend-item"><span class="legend-dot" style="background:var(--deep)"></span>Deep</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--light)"></span>Light</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--rem)"></span>REM</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--stress-color)"></span>Avg Stress</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--success)"></span>Battery Δ &gt;30</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--warning)"></span>Battery Δ 10–30</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--danger)"></span>Battery Δ &lt;10</div>
+      `;
+
+      render();
+    });
+  </script>
+</body>
+</html>

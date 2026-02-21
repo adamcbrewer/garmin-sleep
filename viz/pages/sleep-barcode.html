@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sleep Barcode — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .barcode-wrapper {
+      position: relative;
+      overflow-x: auto;
+    }
+    .barcode-wrapper canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Sleep Barcode',
+      'Every night compressed to a single horizontal strip — color encodes sleep stage. Stack 6 months vertically and patterns emerge like a barcode.',
+      'Data Art'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = '<div class="viz-container"><div class="barcode-wrapper"><div class="loading">Loading sleep data</div></div></div>';
+    const container = root.querySelector('.viz-container');
+    const wrapper = root.querySelector('.barcode-wrapper');
+
+    const ROW_H = 4;
+    const ROW_GAP = 1;
+    const STRIP = ROW_H + ROW_GAP;
+    const MARGIN = { top: 32, right: 16, bottom: 8, left: 72 };
+    const TIME_MIN = 19;
+    const TIME_MAX = 34;
+
+    const COLORS = {
+      0: '#2563eb',
+      1: '#5b9bd5',
+      2: '#c45a8a',
+      3: '#d4a54a',
+    };
+
+    Promise.all([loadData('levels.json'), loadData('summary.json')]).then(([levels, summary]) => {
+      const byDate = d3.group(levels, d => d.date);
+      const dates = [...byDate.keys()].sort();
+
+      const width = wrapper.clientWidth;
+      const innerW = width - MARGIN.left - MARGIN.right;
+      const height = MARGIN.top + dates.length * STRIP + MARGIN.bottom;
+
+      wrapper.innerHTML = '';
+      const canvas = document.createElement('canvas');
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = width + 'px';
+      canvas.style.height = height + 'px';
+      wrapper.appendChild(canvas);
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      const xScale = (h) => MARGIN.left + ((h - TIME_MIN) / (TIME_MAX - TIME_MIN)) * innerW;
+
+      // time labels along top
+      ctx.font = '10px "DM Sans", system-ui, sans-serif';
+      ctx.fillStyle = '#5a5870';
+      ctx.textAlign = 'center';
+      for (let h = 20; h <= 33; h++) {
+        const x = xScale(h);
+        const label = formatHour(h);
+        ctx.fillText(label, x, MARGIN.top - 10);
+        ctx.strokeStyle = 'rgba(42, 42, 58, 0.4)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, MARGIN.top - 4);
+        ctx.lineTo(x, height - MARGIN.bottom);
+        ctx.stroke();
+      }
+
+      // date labels — monthly markers
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      let lastMonth = null;
+      dates.forEach((date, i) => {
+        const d = new Date(date + 'T12:00:00');
+        const month = d.getMonth();
+        const y = MARGIN.top + i * STRIP + ROW_H / 2;
+        if (month !== lastMonth) {
+          const label = d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+          ctx.fillStyle = '#8a889a';
+          ctx.font = '10px "DM Sans", system-ui, sans-serif';
+          ctx.fillText(label, MARGIN.left - 10, y);
+          lastMonth = month;
+        } else if (d.getDate() === 1 || d.getDate() === 15) {
+          ctx.fillStyle = '#5a5870';
+          ctx.font = '9px "DM Sans", system-ui, sans-serif';
+          ctx.fillText(d.getDate().toString(), MARGIN.left - 10, y);
+        }
+      });
+
+      // draw barcode strips
+      dates.forEach((date, i) => {
+        const segments = byDate.get(date);
+        const y = MARGIN.top + i * STRIP;
+
+        segments.forEach(seg => {
+          const x1 = xScale(Math.max(seg.start, TIME_MIN));
+          const x2 = xScale(Math.min(seg.end, TIME_MAX));
+          if (x2 <= x1) return;
+          ctx.fillStyle = COLORS[seg.stage] || '#3a3a4a';
+          ctx.fillRect(x1, y, x2 - x1, ROW_H);
+        });
+      });
+
+      // legend
+      makeLegend(container);
+
+      // tooltip on hover
+      const tip = createTooltip(container);
+
+      canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        const row = Math.floor((my - MARGIN.top) / STRIP);
+        if (row < 0 || row >= dates.length || mx < MARGIN.left || mx > width - MARGIN.right) {
+          tip.hide();
+          return;
+        }
+
+        const date = dates[row];
+        const hour = TIME_MIN + ((mx - MARGIN.left) / innerW) * (TIME_MAX - TIME_MIN);
+        const segments = byDate.get(date);
+        const seg = segments.find(s => hour >= s.start && hour < s.end);
+        const stageTxt = seg ? stageName(seg.stage) : 'No data';
+
+        tip.show(
+          `<div class="tooltip-label">${formatDateLong(date)}</div>` +
+          `<div class="tooltip-value">${formatHour(hour)} — ${stageTxt}</div>`,
+          mx, my
+        );
+      });
+
+      canvas.addEventListener('mouseleave', () => tip.hide());
+
+      // resize handler
+      let resizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          const newWidth = wrapper.clientWidth;
+          const newInnerW = newWidth - MARGIN.left - MARGIN.right;
+          const newDpr = window.devicePixelRatio || 1;
+
+          canvas.width = newWidth * newDpr;
+          canvas.height = height * newDpr;
+          canvas.style.width = newWidth + 'px';
+          canvas.style.height = height + 'px';
+
+          const c = canvas.getContext('2d');
+          c.scale(newDpr, newDpr);
+
+          const xs = (h) => MARGIN.left + ((h - TIME_MIN) / (TIME_MAX - TIME_MIN)) * newInnerW;
+
+          c.font = '10px "DM Sans", system-ui, sans-serif';
+          c.fillStyle = '#5a5870';
+          c.textAlign = 'center';
+          for (let h = 20; h <= 33; h++) {
+            const x = xs(h);
+            c.fillText(formatHour(h), x, MARGIN.top - 10);
+            c.strokeStyle = 'rgba(42, 42, 58, 0.4)';
+            c.lineWidth = 0.5;
+            c.beginPath();
+            c.moveTo(x, MARGIN.top - 4);
+            c.lineTo(x, height - MARGIN.bottom);
+            c.stroke();
+          }
+
+          c.textAlign = 'right';
+          c.textBaseline = 'middle';
+          let lm = null;
+          dates.forEach((date, i) => {
+            const d = new Date(date + 'T12:00:00');
+            const month = d.getMonth();
+            const y = MARGIN.top + i * STRIP + ROW_H / 2;
+            if (month !== lm) {
+              c.fillStyle = '#8a889a';
+              c.font = '10px "DM Sans", system-ui, sans-serif';
+              c.fillText(d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }), MARGIN.left - 10, y);
+              lm = month;
+            } else if (d.getDate() === 1 || d.getDate() === 15) {
+              c.fillStyle = '#5a5870';
+              c.font = '9px "DM Sans", system-ui, sans-serif';
+              c.fillText(d.getDate().toString(), MARGIN.left - 10, y);
+            }
+          });
+
+          dates.forEach((date, i) => {
+            const segments = byDate.get(date);
+            const y = MARGIN.top + i * STRIP;
+            segments.forEach(seg => {
+              const x1 = xs(Math.max(seg.start, TIME_MIN));
+              const x2 = xs(Math.min(seg.end, TIME_MAX));
+              if (x2 <= x1) return;
+              c.fillStyle = COLORS[seg.stage] || '#3a3a4a';
+              c.fillRect(x1, y, x2 - x1, ROW_H);
+            });
+          });
+        }, 150);
+      });
+    });
+  </script>
+</body>
+</html>

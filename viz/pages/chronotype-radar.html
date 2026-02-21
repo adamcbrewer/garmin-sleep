@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chronotype Radar — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .radar-legend {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .radar-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .radar-legend-line {
+      width: 24px;
+      height: 2px;
+      border-radius: 1px;
+      flex-shrink: 0;
+    }
+
+    .radar-legend-line.dashed {
+      height: 0;
+      border-top: 2px dashed;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Chronotype <em>Radar</em>',
+      'Spider chart comparing your sleep profile against reference chronotypes — Lion, Bear, Wolf, and Dolphin.',
+      'Comparative'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="stats-row" id="stats-row"></div>
+      <div class="viz-container">
+        <div class="viz-canvas" id="canvas"><div class="loading">Loading sleep data</div></div>
+        <div class="radar-legend" id="legend"></div>
+      </div>
+    `;
+
+    const AXES = [
+      { key: 'bedtime', label: 'Bedtime', unit: '' },
+      { key: 'waketime', label: 'Wake Time', unit: '' },
+      { key: 'totalSleep', label: 'Total Sleep', unit: '' },
+      { key: 'deepPct', label: 'Deep %', unit: '%' },
+      { key: 'remPct', label: 'REM %', unit: '%' },
+      { key: 'efficiency', label: 'Efficiency', unit: '%' },
+    ];
+
+    const CHRONOTYPES = [
+      {
+        name: 'Lion',
+        desc: 'Early bird',
+        color: '#f59e0b',
+        values: { bedtime: 0.8, waketime: 0.85, totalSleep: 0.6, deepPct: 0.8, remPct: 0.5, efficiency: 0.75 },
+      },
+      {
+        name: 'Bear',
+        desc: 'Average',
+        color: '#22c55e',
+        values: { bedtime: 0.5, waketime: 0.5, totalSleep: 0.55, deepPct: 0.55, remPct: 0.55, efficiency: 0.6 },
+      },
+      {
+        name: 'Wolf',
+        desc: 'Night owl',
+        color: '#6366f1',
+        values: { bedtime: 0.2, waketime: 0.2, totalSleep: 0.5, deepPct: 0.4, remPct: 0.75, efficiency: 0.55 },
+      },
+      {
+        name: 'Dolphin',
+        desc: 'Light sleeper',
+        color: '#ec4899',
+        values: { bedtime: 0.4, waketime: 0.6, totalSleep: 0.35, deepPct: 0.25, remPct: 0.45, efficiency: 0.3 },
+      },
+    ];
+
+    loadData('summary.json').then(summary => {
+      summary.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      const avgBedtime = d3.mean(summary, d => d.bedtime);
+      const avgWaketime = d3.mean(summary, d => d.waketime);
+      const avgTotalSleep = d3.mean(summary, d => d.totalSleep);
+      const avgDeepPct = d3.mean(summary, d => d.totalSleep > 0 ? d.deep / d.totalSleep * 100 : 0);
+      const avgRemPct = d3.mean(summary, d => d.totalSleep > 0 ? d.rem / d.totalSleep * 100 : 0);
+      const avgEff = d3.mean(summary, d => d.efficiency);
+
+      document.getElementById('stats-row').innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${formatHour(avgBedtime)}</div>
+          <div class="stat-label">Avg Bedtime</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatHour(avgWaketime)}</div>
+          <div class="stat-label">Avg Wake</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatDuration(avgTotalSleep)}</div>
+          <div class="stat-label">Avg Sleep</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgDeepPct.toFixed(1)}%</div>
+          <div class="stat-label">Deep %</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgRemPct.toFixed(1)}%</div>
+          <div class="stat-label">REM %</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgEff.toFixed(1)}%</div>
+          <div class="stat-label">Efficiency</div>
+        </div>
+      `;
+
+      function normalize(key, value) {
+        const ranges = {
+          bedtime: [24, 20],
+          waketime: [32, 28],
+          totalSleep: [18000, 32400],
+          deepPct: [0, 35],
+          remPct: [0, 30],
+          efficiency: [70, 100],
+        };
+        const [lo, hi] = ranges[key];
+        return Math.max(0, Math.min(1, (value - lo) / (hi - lo)));
+      }
+
+      const myProfile = {
+        bedtime: normalize('bedtime', avgBedtime),
+        waketime: normalize('waketime', avgWaketime),
+        totalSleep: normalize('totalSleep', avgTotalSleep),
+        deepPct: normalize('deepPct', avgDeepPct),
+        remPct: normalize('remPct', avgRemPct),
+        efficiency: normalize('efficiency', avgEff),
+      };
+
+      const WIDTH = 600;
+      const HEIGHT = 600;
+      const margin = { top: 60, right: 60, bottom: 60, left: 60 };
+      const { svg, g, innerWidth, innerHeight } = createSVG('#canvas', WIDTH, HEIGHT, margin);
+
+      const cx = innerWidth / 2;
+      const cy = innerHeight / 2;
+      const maxR = Math.min(innerWidth, innerHeight) / 2 - 20;
+
+      const levels = 5;
+      for (let lv = 1; lv <= levels; lv++) {
+        const r = (maxR / levels) * lv;
+        const pts = AXES.map((_, i) => {
+          const angle = (Math.PI * 2 / AXES.length) * i - Math.PI / 2;
+          return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+        });
+        g.append('polygon')
+          .attr('points', pts.map(p => p.join(',')).join(' '))
+          .attr('fill', 'none')
+          .attr('stroke', 'var(--border-subtle)')
+          .attr('stroke-width', 0.5);
+
+        if (lv === levels) {
+          g.append('text')
+            .attr('x', cx + 4)
+            .attr('y', cy - r - 4)
+            .attr('fill', 'var(--text-dim)')
+            .attr('font-size', '8px')
+            .attr('font-family', 'var(--font-mono)')
+            .text('1.0');
+        }
+      }
+
+      AXES.forEach((axis, i) => {
+        const angle = (Math.PI * 2 / AXES.length) * i - Math.PI / 2;
+        const x2 = cx + maxR * Math.cos(angle);
+        const y2 = cy + maxR * Math.sin(angle);
+
+        g.append('line')
+          .attr('x1', cx).attr('y1', cy)
+          .attr('x2', x2).attr('y2', y2)
+          .attr('stroke', 'var(--border-subtle)')
+          .attr('stroke-width', 0.5);
+
+        const labelR = maxR + 18;
+        const lx = cx + labelR * Math.cos(angle);
+        const ly = cy + labelR * Math.sin(angle);
+
+        g.append('text')
+          .attr('x', lx).attr('y', ly)
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', 'var(--text-muted)')
+          .attr('font-size', '11px')
+          .attr('font-weight', '400')
+          .text(axis.label);
+      });
+
+      function getPolygonPoints(profile) {
+        return AXES.map((axis, i) => {
+          const angle = (Math.PI * 2 / AXES.length) * i - Math.PI / 2;
+          const r = maxR * (profile[axis.key] || 0);
+          return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+        });
+      }
+
+      CHRONOTYPES.forEach(chrono => {
+        const pts = getPolygonPoints(chrono.values);
+        g.append('polygon')
+          .attr('points', pts.map(p => p.join(',')).join(' '))
+          .attr('fill', 'none')
+          .attr('stroke', chrono.color)
+          .attr('stroke-width', 1.2)
+          .attr('stroke-dasharray', '5,3')
+          .attr('opacity', 0.5);
+
+        const maxIdx = Object.values(chrono.values).indexOf(Math.max(...Object.values(chrono.values)));
+        const labelAngle = (Math.PI * 2 / AXES.length) * maxIdx - Math.PI / 2;
+        const labelR = maxR * chrono.values[AXES[maxIdx].key] + 12;
+        g.append('text')
+          .attr('x', cx + labelR * Math.cos(labelAngle))
+          .attr('y', cy + labelR * Math.sin(labelAngle))
+          .attr('text-anchor', 'middle')
+          .attr('fill', chrono.color)
+          .attr('font-size', '9px')
+          .attr('font-family', 'var(--font-mono)')
+          .attr('opacity', 0.7)
+          .text(chrono.name);
+      });
+
+      const myPts = getPolygonPoints(myProfile);
+      g.append('polygon')
+        .attr('points', myPts.map(p => p.join(',')).join(' '))
+        .attr('fill', 'var(--accent)')
+        .attr('fill-opacity', 0.15)
+        .attr('stroke', 'var(--accent)')
+        .attr('stroke-width', 2);
+
+      myPts.forEach((pt, i) => {
+        g.append('circle')
+          .attr('cx', pt[0]).attr('cy', pt[1])
+          .attr('r', 4)
+          .attr('fill', 'var(--accent)')
+          .attr('stroke', 'var(--bg-card)')
+          .attr('stroke-width', 2);
+      });
+
+      const tooltip = createTooltip(document.querySelector('.viz-container'));
+      const rawValues = {
+        bedtime: formatHour(avgBedtime),
+        waketime: formatHour(avgWaketime),
+        totalSleep: formatDuration(avgTotalSleep),
+        deepPct: avgDeepPct.toFixed(1) + '%',
+        remPct: avgRemPct.toFixed(1) + '%',
+        efficiency: avgEff.toFixed(1) + '%',
+      };
+
+      myPts.forEach((pt, i) => {
+        g.append('circle')
+          .attr('cx', pt[0]).attr('cy', pt[1])
+          .attr('r', 12)
+          .attr('fill', 'transparent')
+          .attr('cursor', 'pointer')
+          .on('mouseenter', function(event) {
+            const containerRect = document.querySelector('.viz-container').getBoundingClientRect();
+            const svgRect = svg.node().getBoundingClientRect();
+            const sx = svgRect.width / WIDTH;
+            const px = svgRect.left - containerRect.left + (margin.left + pt[0]) * sx;
+            const py = svgRect.top - containerRect.top + (margin.top + pt[1]) * sx;
+            tooltip.show(
+              `<div class="tooltip-label">${AXES[i].label}</div>
+               <div class="tooltip-value" style="color:var(--accent)">${rawValues[AXES[i].key]}</div>
+               <div style="font-size:0.65rem;color:var(--text-dim)">Score: ${myProfile[AXES[i].key].toFixed(2)}</div>`,
+              px, py
+            );
+          })
+          .on('mouseleave', () => tooltip.hide());
+      });
+
+      function closestChronotype() {
+        let best = null, bestDist = Infinity;
+        CHRONOTYPES.forEach(c => {
+          const dist = AXES.reduce((sum, a) => sum + Math.pow((myProfile[a.key] || 0) - (c.values[a.key] || 0), 2), 0);
+          if (dist < bestDist) { bestDist = dist; best = c; }
+        });
+        return best;
+      }
+
+      const closest = closestChronotype();
+
+      const legendEl = document.getElementById('legend');
+      legendEl.innerHTML = `
+        <div class="radar-legend-item">
+          <span class="radar-legend-line" style="background:var(--accent)"></span>
+          You${closest ? ` (closest: ${closest.name})` : ''}
+        </div>
+        ${CHRONOTYPES.map(c => `
+          <div class="radar-legend-item">
+            <span class="radar-legend-line dashed" style="border-color:${c.color}"></span>
+            ${c.name} <span style="color:var(--text-dim);font-size:0.65rem">${c.desc}</span>
+          </div>
+        `).join('')}
+      `;
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>24-Hour Radial Clock — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .clock-svg {
+      display: block;
+      margin: 0 auto;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      '24-Hour Radial <em>Clock</em>',
+      'Every night of sleep mapped onto a polar chart — angle is time of day, overlapping arcs reveal your chronotype through density.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="stats-row" id="stats-row"></div>
+      <div class="viz-container">
+        <div class="viz-canvas" id="clock-canvas">
+          <div class="loading">Loading sleep data</div>
+        </div>
+        <div id="legend-container"></div>
+      </div>
+    `;
+
+    const SIZE = 660;
+    const CENTER = SIZE / 2;
+    const OUTER_R = 270;
+    const BAND_W = 80;
+    const INNER_R = OUTER_R - BAND_W;
+    const ARC_OPACITY = 0.16;
+
+    const STAGE_ARC_COLORS = {
+      0: '#2563eb',
+      1: '#5b9bd5',
+      2: '#c45a8a',
+      3: '#d4a54a',
+    };
+
+    function hourToAngle(h) {
+      return ((h % 24) / 24) * 2 * Math.PI - Math.PI / 2;
+    }
+
+    function circularMean(angles) {
+      let sinSum = 0, cosSum = 0;
+      angles.forEach(a => { sinSum += Math.sin(a); cosSum += Math.cos(a); });
+      return Math.atan2(sinSum / angles.length, cosSum / angles.length);
+    }
+
+    function angleToHour(angle) {
+      let h = ((angle + Math.PI / 2) / (2 * Math.PI)) * 24;
+      return ((h % 24) + 24) % 24;
+    }
+
+    Promise.all([loadData('levels.json'), loadData('summary.json')]).then(([levels, summary]) => {
+      const byDate = d3.group(levels, d => d.date);
+      const dates = [...byDate.keys()].sort();
+
+      const bedtimeAngles = [];
+      const waketimeAngles = [];
+
+      dates.forEach(date => {
+        const segs = byDate.get(date);
+        const sleepSegs = segs.filter(s => s.stage !== 3);
+        if (!sleepSegs.length) return;
+        const bed = d3.min(sleepSegs, s => s.start);
+        const wake = d3.max(sleepSegs, s => s.end);
+        bedtimeAngles.push(hourToAngle(bed));
+        waketimeAngles.push(hourToAngle(wake));
+      });
+
+      const avgBedAngle = circularMean(bedtimeAngles);
+      const avgWakeAngle = circularMean(waketimeAngles);
+      const avgBedHour = angleToHour(avgBedAngle);
+      const avgWakeHour = angleToHour(avgWakeAngle);
+
+      const avgDuration = summary.reduce((s, d) => s + (d.totalSleep || 0), 0) / summary.filter(d => d.totalSleep > 0).length;
+
+      const statsRow = document.getElementById('stats-row');
+      statsRow.innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${formatHour(avgBedHour)}</div>
+          <div class="stat-label">Avg Bedtime</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatHour(avgWakeHour)}</div>
+          <div class="stat-label">Avg Wake Time</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatDuration(avgDuration)}</div>
+          <div class="stat-label">Avg Duration</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${dates.length}</div>
+          <div class="stat-label">Nights Tracked</div>
+        </div>
+      `;
+
+      const canvas = document.getElementById('clock-canvas');
+      canvas.innerHTML = '';
+
+      const svg = d3.select(canvas)
+        .append('svg')
+        .attr('class', 'clock-svg')
+        .attr('viewBox', `0 0 ${SIZE} ${SIZE}`)
+        .attr('width', '100%')
+        .attr('preserveAspectRatio', 'xMidYMid meet')
+        .style('max-width', `${SIZE}px`);
+
+      const g = svg.append('g')
+        .attr('transform', `translate(${CENTER},${CENTER})`);
+
+      const gridRadii = [INNER_R, INNER_R + BAND_W * 0.33, INNER_R + BAND_W * 0.66, OUTER_R];
+      gridRadii.forEach(r => {
+        g.append('circle')
+          .attr('r', r)
+          .attr('fill', 'none')
+          .attr('stroke', 'var(--border-subtle)')
+          .attr('stroke-opacity', 0.5);
+      });
+
+      for (let h = 0; h < 24; h++) {
+        const angle = hourToAngle(h);
+        const x1 = Math.cos(angle) * (INNER_R - 4);
+        const y1 = Math.sin(angle) * (INNER_R - 4);
+        const x2 = Math.cos(angle) * (OUTER_R + 4);
+        const y2 = Math.sin(angle) * (OUTER_R + 4);
+        g.append('line')
+          .attr('x1', x1).attr('y1', y1)
+          .attr('x2', x2).attr('y2', y2)
+          .attr('stroke', 'var(--border-subtle)')
+          .attr('stroke-opacity', h % 3 === 0 ? 0.6 : 0.25);
+      }
+
+      const clockLabels = [
+        { hour: 0, text: '12am' },
+        { hour: 3, text: '3am' },
+        { hour: 6, text: '6am' },
+        { hour: 9, text: '9am' },
+        { hour: 12, text: '12pm' },
+        { hour: 15, text: '3pm' },
+        { hour: 18, text: '6pm' },
+        { hour: 21, text: '9pm' },
+      ];
+
+      clockLabels.forEach(({ hour, text }) => {
+        const angle = hourToAngle(hour);
+        const r = OUTER_R + 22;
+        const x = Math.cos(angle) * r;
+        const y = Math.sin(angle) * r;
+        g.append('text')
+          .attr('x', x)
+          .attr('y', y)
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', 'var(--text-dim)')
+          .attr('font-size', '11px')
+          .attr('font-family', 'var(--font-mono)')
+          .text(text);
+      });
+
+      const arcGen = d3.arc()
+        .innerRadius(INNER_R)
+        .outerRadius(OUTER_R);
+
+      dates.forEach(date => {
+        const segs = byDate.get(date);
+        segs.forEach(seg => {
+          if (seg.stage === -1) return;
+          const startAngle = hourToAngle(seg.start) + Math.PI / 2;
+          const endAngle = hourToAngle(seg.end) + Math.PI / 2;
+
+          g.append('path')
+            .attr('d', arcGen({ startAngle, endAngle }))
+            .attr('fill', STAGE_ARC_COLORS[seg.stage] || '#3a3a4a')
+            .attr('fill-opacity', ARC_OPACITY)
+            .attr('stroke', 'none');
+        });
+      });
+
+      function drawMarker(angle, color, label, side) {
+        const x1 = Math.cos(angle) * (INNER_R - 10);
+        const y1 = Math.sin(angle) * (INNER_R - 10);
+        const x2 = Math.cos(angle) * (OUTER_R + 10);
+        const y2 = Math.sin(angle) * (OUTER_R + 10);
+
+        g.append('line')
+          .attr('x1', x1).attr('y1', y1)
+          .attr('x2', x2).attr('y2', y2)
+          .attr('stroke', color)
+          .attr('stroke-width', 2)
+          .attr('stroke-dasharray', '4,3')
+          .attr('opacity', 0.9);
+
+        const labelR = side === 'inner' ? INNER_R - 20 : OUTER_R + 38;
+        const lx = Math.cos(angle) * labelR;
+        const ly = Math.sin(angle) * labelR;
+
+        g.append('text')
+          .attr('x', lx)
+          .attr('y', ly)
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', color)
+          .attr('font-size', '10px')
+          .attr('font-weight', 500)
+          .attr('font-family', 'var(--font-mono)')
+          .text(label);
+      }
+
+      drawMarker(avgBedAngle, '#8b5cf6', `bed ${formatHour(avgBedHour)}`, 'outer');
+      drawMarker(avgWakeAngle, '#34d399', `wake ${formatHour(avgWakeHour)}`, 'outer');
+
+      makeLegend(document.getElementById('legend-container'));
+    });
+  </script>
+</body>
+</html>

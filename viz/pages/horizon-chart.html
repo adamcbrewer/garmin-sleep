@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Horizon Chart — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .horizon-wrapper {
+      position: relative;
+      overflow-x: auto;
+    }
+    .horizon-wrapper canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Horizon <em>Chart</em>',
+      'Raster plot — one row per night, stacked vertically. Bedtime and waketime trend lines reveal schedule consistency at a glance.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = '<div class="stats-row" id="stats"></div>' +
+      '<div class="viz-container"><div class="horizon-wrapper"><div class="loading">Loading sleep data</div></div></div>';
+    const container = root.querySelector('.viz-container');
+    const wrapper = root.querySelector('.horizon-wrapper');
+
+    const ROW_H = 5;
+    const ROW_GAP = 1;
+    const STRIP = ROW_H + ROW_GAP;
+    const MARGIN = { top: 32, right: 16, bottom: 8, left: 72 };
+    const TIME_MIN = 19;
+    const TIME_MAX = 33;
+
+    const COLORS = {
+      0: '#2563eb',
+      1: '#5b9bd5',
+      2: '#c45a8a',
+      3: '#d4a54a',
+    };
+
+    Promise.all([loadData('levels.json'), loadData('summary.json')]).then(([levels, summary]) => {
+      const byDate = d3.group(levels, d => d.date);
+      const dates = [...byDate.keys()].sort();
+
+      const summaryMap = new Map(summary.map(s => [s.date, s]));
+
+      const bedtimes = [];
+      const waketimes = [];
+      dates.forEach(date => {
+        const s = summaryMap.get(date);
+        if (s) {
+          bedtimes.push(s.bedtime);
+          waketimes.push(s.waketime);
+        } else {
+          bedtimes.push(null);
+          waketimes.push(null);
+        }
+      });
+
+      // stats
+      const validSummaries = dates.map(d => summaryMap.get(d)).filter(Boolean);
+      const avgSleep = validSummaries.length
+        ? d3.mean(validSummaries, d => d.totalSleep)
+        : 0;
+      const avgBedtime = validSummaries.length
+        ? d3.mean(validSummaries, d => d.bedtime)
+        : 0;
+      const avgWaketime = validSummaries.length
+        ? d3.mean(validSummaries, d => d.waketime)
+        : 0;
+      const bedtimeStd = validSummaries.length > 1
+        ? Math.sqrt(d3.variance(validSummaries, d => d.bedtime))
+        : 0;
+
+      document.getElementById('stats').innerHTML =
+        `<div class="stat"><div class="stat-value">${dates.length}</div><div class="stat-label">Nights</div></div>` +
+        `<div class="stat"><div class="stat-value">${formatDuration(avgSleep)}</div><div class="stat-label">Avg Sleep</div></div>` +
+        `<div class="stat"><div class="stat-value">${formatHour(avgBedtime)}</div><div class="stat-label">Avg Bedtime</div></div>` +
+        `<div class="stat"><div class="stat-value">${formatHour(avgWaketime)}</div><div class="stat-label">Avg Waketime</div></div>` +
+        `<div class="stat"><div class="stat-value">${Math.round(bedtimeStd * 60)}m</div><div class="stat-label">Bedtime Variability</div></div>`;
+
+      function draw() {
+        const width = wrapper.clientWidth;
+        const innerW = width - MARGIN.left - MARGIN.right;
+        const height = MARGIN.top + dates.length * STRIP + MARGIN.bottom;
+
+        wrapper.innerHTML = '';
+        const canvas = document.createElement('canvas');
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        wrapper.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        // dark background
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0, 0, width, height);
+
+        const xScale = (h) => MARGIN.left + ((h - TIME_MIN) / (TIME_MAX - TIME_MIN)) * innerW;
+
+        // time labels along top
+        ctx.font = '10px "DM Sans", system-ui, sans-serif';
+        ctx.fillStyle = '#5a5870';
+        ctx.textAlign = 'center';
+        for (let h = 20; h <= 33; h++) {
+          const x = xScale(h);
+          ctx.fillText(formatHour(h), x, MARGIN.top - 10);
+          ctx.strokeStyle = 'rgba(42, 42, 58, 0.3)';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(x, MARGIN.top - 4);
+          ctx.lineTo(x, height - MARGIN.bottom);
+          ctx.stroke();
+        }
+
+        // month labels + week markers
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        let lastMonth = null;
+        dates.forEach((date, i) => {
+          const d = new Date(date + 'T12:00:00');
+          const month = d.getMonth();
+          const y = MARGIN.top + i * STRIP + ROW_H / 2;
+
+          // week start marker — thin bright line
+          if (d.getDay() === 1) {
+            ctx.strokeStyle = 'rgba(232, 230, 240, 0.12)';
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(MARGIN.left, MARGIN.top + i * STRIP - 0.5);
+            ctx.lineTo(width - MARGIN.right, MARGIN.top + i * STRIP - 0.5);
+            ctx.stroke();
+          }
+
+          if (month !== lastMonth) {
+            const label = d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+            ctx.fillStyle = '#8a889a';
+            ctx.font = '10px "DM Sans", system-ui, sans-serif';
+            ctx.fillText(label, MARGIN.left - 10, y);
+            lastMonth = month;
+          }
+        });
+
+        // draw raster strips
+        dates.forEach((date, i) => {
+          const segments = byDate.get(date);
+          const y = MARGIN.top + i * STRIP;
+
+          segments.forEach(seg => {
+            const x1 = xScale(Math.max(seg.start, TIME_MIN));
+            const x2 = xScale(Math.min(seg.end, TIME_MAX));
+            if (x2 <= x1) return;
+            ctx.fillStyle = COLORS[seg.stage] || '#3a3a4a';
+            ctx.fillRect(x1, y, x2 - x1, ROW_H);
+          });
+        });
+
+        // bedtime/waketime trend lines
+        drawTrendLine(ctx, dates, bedtimes, xScale, innerW, 'rgba(255, 255, 255, 0.6)');
+        drawTrendLine(ctx, dates, waketimes, xScale, innerW, 'rgba(255, 255, 255, 0.6)');
+
+        // tooltip
+        const tip = createTooltip(container);
+        canvas.addEventListener('mousemove', (e) => {
+          const rect = canvas.getBoundingClientRect();
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+
+          const row = Math.floor((my - MARGIN.top) / STRIP);
+          if (row < 0 || row >= dates.length || mx < MARGIN.left || mx > width - MARGIN.right) {
+            tip.hide();
+            return;
+          }
+
+          const date = dates[row];
+          const hour = TIME_MIN + ((mx - MARGIN.left) / innerW) * (TIME_MAX - TIME_MIN);
+          const segments = byDate.get(date);
+          const seg = segments.find(s => hour >= s.start && hour < s.end);
+          const stageTxt = seg ? stageName(seg.stage) : 'No data';
+          const s = summaryMap.get(date);
+          const sleepTxt = s ? formatDuration(s.totalSleep) : '';
+
+          tip.show(
+            `<div class="tooltip-label">${formatDateLong(date)}</div>` +
+            `<div class="tooltip-value">${formatHour(hour)} — ${stageTxt}</div>` +
+            (sleepTxt ? `<div class="tooltip-value" style="color:var(--text-muted);font-size:0.65rem">${sleepTxt} total</div>` : ''),
+            mx, my
+          );
+        });
+
+        canvas.addEventListener('mouseleave', () => tip.hide());
+      }
+
+      function drawTrendLine(ctx, dates, values, xScale, innerW, color) {
+        // collect valid points
+        const points = [];
+        dates.forEach((date, i) => {
+          const v = values[i];
+          if (v != null) {
+            const x = xScale(v);
+            const y = MARGIN.top + i * STRIP + ROW_H / 2;
+            points.push([x, y]);
+          }
+        });
+
+        if (points.length < 2) return;
+
+        // smooth with moving average (window=7)
+        const window = 7;
+        const smoothed = points.map((p, i) => {
+          const lo = Math.max(0, i - Math.floor(window / 2));
+          const hi = Math.min(points.length, i + Math.ceil(window / 2));
+          const slice = points.slice(lo, hi);
+          const avgX = d3.mean(slice, d => d[0]);
+          return [avgX, p[1]];
+        });
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.2;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(smoothed[0][0], smoothed[0][1]);
+        for (let i = 1; i < smoothed.length; i++) {
+          const prev = smoothed[i - 1];
+          const curr = smoothed[i];
+          const cpY = (prev[1] + curr[1]) / 2;
+          ctx.quadraticCurveTo(prev[0], cpY, (prev[0] + curr[0]) / 2, cpY);
+          ctx.quadraticCurveTo(curr[0], cpY, curr[0], curr[1]);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      draw();
+
+      // legend
+      makeLegend(container);
+
+      // resize
+      let resizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(draw, 150);
+      });
+    });
+  </script>
+</body>
+</html>

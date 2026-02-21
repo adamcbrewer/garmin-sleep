@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sleep Garden — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .flower:hover { cursor: pointer; }
+    .flower .center { transition: r 0.15s ease; }
+    .flower:hover .center { filter: brightness(1.3); }
+    .flower .petal { transition: opacity 0.15s ease; }
+    .flower:hover .petal { opacity: 1 !important; }
+
+    .legend-petal {
+      width: 18px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Sleep <em>Garden</em>',
+      'Each night rendered as a flower glyph — petals represent sleep stages, their length proportional to duration. Healthier nights bloom larger and brighter.',
+      'Data Art'
+    );
+
+    const root = document.getElementById('viz-root');
+    const container = document.createElement('div');
+    container.className = 'viz-container';
+    root.appendChild(container);
+
+    const vizCanvas = document.createElement('div');
+    vizCanvas.className = 'viz-canvas';
+    container.appendChild(vizCanvas);
+
+    const legendEl = document.createElement('div');
+    legendEl.className = 'legend';
+    legendEl.innerHTML = `
+      <div class="legend-item">
+        <span class="legend-dot" style="background: #2563eb; border-radius: 50%;"></span>
+        Deep (down)
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background: #5b9bd5; border-radius: 50%;"></span>
+        Light (right)
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background: #c45a8a; border-radius: 50%;"></span>
+        REM (up)
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background: #d4a54a; border-radius: 50%;"></span>
+        Awake (left)
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background: var(--accent); border-radius: 50%;"></span>
+        Center = efficiency
+      </div>
+    `;
+    container.appendChild(legendEl);
+
+    const tooltip = createTooltip(container);
+
+    loadData('summary.json').then(data => {
+      const valid = data.filter(d => d.totalSleep > 0);
+
+      const cols = 30;
+      const cellSize = 46;
+      const padding = 4;
+      const rows = Math.ceil(valid.length / cols);
+      const width = cols * cellSize;
+      const height = rows * cellSize;
+      const margin = { top: 10, right: 10, bottom: 10, left: 10 };
+
+      const { svg, g } = createSVG(vizCanvas, width + margin.left + margin.right, height + margin.top + margin.bottom, margin);
+
+      svg.style('background', 'transparent');
+
+      const maxDeep = d3.max(valid, d => d.deep);
+      const maxLight = d3.max(valid, d => d.light);
+      const maxREM = d3.max(valid, d => d.rem);
+      const maxAwake = d3.max(valid, d => d.awake) || 1;
+      const maxTotal = d3.max(valid, d => d.totalSleep);
+
+      const petalRadius = (cellSize - padding * 2) / 2 - 2;
+
+      const deepScale = d3.scaleLinear().domain([0, maxDeep]).range([3, petalRadius]);
+      const lightScale = d3.scaleLinear().domain([0, maxLight]).range([3, petalRadius]);
+      const remScale = d3.scaleLinear().domain([0, maxREM]).range([3, petalRadius]);
+      const awakeScale = d3.scaleLinear().domain([0, maxAwake]).range([2, petalRadius * 0.6]);
+      const efficiencyScale = d3.scaleLinear().domain([80, 100]).range([2, 5]).clamp(true);
+      const opacityScale = d3.scaleLinear().domain([d3.min(valid, d => d.totalSleep), maxTotal]).range([0.35, 1]);
+      const sizeScale = d3.scaleLinear().domain([d3.min(valid, d => d.totalSleep), maxTotal]).range([0.6, 1]);
+
+      function petalPath(length, width) {
+        const w = width || Math.max(2.5, length * 0.22);
+        const cp1 = length * 0.3;
+        const cp2 = length * 0.7;
+        return `M 0,0 C ${w},${-cp1} ${w * 0.8},${-cp2} 0,${-length} C ${-w * 0.8},${-cp2} ${-w},${-cp1} 0,0 Z`;
+      }
+
+      const flowers = g.selectAll('.flower')
+        .data(valid)
+        .join('g')
+        .attr('class', 'flower')
+        .attr('transform', (d, i) => {
+          const col = i % cols;
+          const row = Math.floor(i / cols);
+          const cx = col * cellSize + cellSize / 2;
+          const cy = row * cellSize + cellSize / 2;
+          return `translate(${cx},${cy})`;
+        });
+
+      const stages = [
+        { key: 'deep',  angle: 180, scale: deepScale,  color: '#2563eb', bright: '#3b82f6' },
+        { key: 'light', angle: 90,  scale: lightScale, color: '#5b9bd5', bright: '#7cc4f5' },
+        { key: 'rem',   angle: 0,   scale: remScale,   color: '#c45a8a', bright: '#f472b6' },
+        { key: 'awake', angle: 270, scale: awakeScale,  color: '#d4a54a', bright: '#fbbf24' },
+      ];
+
+      stages.forEach(stage => {
+        flowers.each(function(d) {
+          const val = d[stage.key];
+          if (!val || val <= 0) return;
+
+          const flower = d3.select(this);
+          const s = sizeScale(d.totalSleep);
+          const len = stage.scale(val) * s;
+          const op = opacityScale(d.totalSleep);
+
+          flower.append('path')
+            .attr('class', 'petal')
+            .attr('d', petalPath(len))
+            .attr('transform', `rotate(${stage.angle})`)
+            .attr('fill', stage.color)
+            .attr('opacity', op * 0.85)
+            .attr('stroke', stage.bright)
+            .attr('stroke-width', 0.3)
+            .attr('stroke-opacity', op * 0.5);
+
+          if (len > 6) {
+            const innerLen = len * 0.55;
+            flower.append('path')
+              .attr('class', 'petal')
+              .attr('d', petalPath(innerLen, innerLen * 0.18))
+              .attr('transform', `rotate(${stage.angle})`)
+              .attr('fill', stage.bright)
+              .attr('opacity', op * 0.3);
+          }
+        });
+      });
+
+      flowers.append('circle')
+        .attr('class', 'center')
+        .attr('r', d => efficiencyScale(d.efficiency))
+        .attr('fill', '#e8e6f0')
+        .attr('opacity', d => opacityScale(d.totalSleep) * 0.9);
+
+      flowers.append('circle')
+        .attr('class', 'center')
+        .attr('r', d => efficiencyScale(d.efficiency) * 0.5)
+        .attr('fill', '#8b5cf6')
+        .attr('opacity', d => opacityScale(d.totalSleep) * 0.7);
+
+      flowers
+        .on('mouseover', function(event, d) {
+          d3.select(this).raise();
+          d3.select(this).selectAll('.petal').attr('filter', 'brightness(1.2)');
+
+          const html = `
+            <div class="tooltip-label">${formatDateLong(d.date)}</div>
+            <div style="margin-top: 4px; display: grid; grid-template-columns: auto auto; gap: 2px 10px; font-size: 0.7rem;">
+              <span style="color: #2563eb;">Deep</span>
+              <span class="tooltip-value">${formatDuration(d.deep)}</span>
+              <span style="color: #5b9bd5;">Light</span>
+              <span class="tooltip-value">${formatDuration(d.light)}</span>
+              <span style="color: #c45a8a;">REM</span>
+              <span class="tooltip-value">${formatDuration(d.rem)}</span>
+              <span style="color: #d4a54a;">Awake</span>
+              <span class="tooltip-value">${formatDuration(d.awake)}</span>
+              <span style="color: var(--text-dim);">Total</span>
+              <span class="tooltip-value">${formatDuration(d.totalSleep)}</span>
+              <span style="color: var(--text-dim);">Efficiency</span>
+              <span class="tooltip-value">${Math.round(d.efficiency)}%</span>
+            </div>
+          `;
+
+          const containerRect = container.getBoundingClientRect();
+          const svgRect = vizCanvas.querySelector('svg').getBoundingClientRect();
+          const [mx, my] = d3.pointer(event, container);
+          tooltip.show(html, mx, my);
+        })
+        .on('mousemove', function(event) {
+          const [mx, my] = d3.pointer(event, container);
+          tooltip.show(tooltip.el.innerHTML, mx, my);
+        })
+        .on('mouseout', function() {
+          d3.select(this).selectAll('.petal').attr('filter', null);
+          tooltip.hide();
+        });
+
+      flowers.append('rect')
+        .attr('x', -cellSize / 2)
+        .attr('y', -cellSize / 2)
+        .attr('width', cellSize)
+        .attr('height', cellSize)
+        .attr('fill', 'transparent')
+        .attr('stroke', 'none');
+    });
+  </script>
+</body>
+</html>

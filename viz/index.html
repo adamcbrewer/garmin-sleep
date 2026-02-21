@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sleep Visualizations</title>
+  <link rel="stylesheet" href="shared/style.css">
+  <style>
+    .hero {
+      padding: 4rem 0 3rem;
+      position: relative;
+    }
+
+    .hero h1 {
+      font-size: 3.8rem;
+      line-height: 1.05;
+      margin-bottom: 1rem;
+      background: linear-gradient(135deg, var(--text) 0%, var(--text-muted) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero h1 em {
+      -webkit-text-fill-color: var(--accent);
+    }
+
+    .hero .subtitle {
+      font-size: 1.05rem;
+      max-width: 50ch;
+    }
+
+    .meta-strip {
+      display: flex;
+      gap: 2rem;
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+
+    .meta-value {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      font-weight: 300;
+      color: var(--text);
+    }
+
+    .meta-label {
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+    }
+
+    .section {
+      margin-bottom: 3.5rem;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .section-header h2 {
+      margin-bottom: 0;
+    }
+
+    .section-count {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1px;
+      background: var(--border-subtle);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .card {
+      background: var(--bg-card);
+      padding: 1.5rem;
+      text-decoration: none;
+      color: inherit;
+      transition: background var(--transition);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      min-height: 140px;
+    }
+
+    .card:hover {
+      background: var(--bg-hover);
+    }
+
+    .card-title {
+      font-family: var(--font-display);
+      font-size: 1.2rem;
+      font-weight: 400;
+      line-height: 1.3;
+      color: var(--text);
+    }
+
+    .card-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+      font-weight: 300;
+      flex: 1;
+    }
+
+    .card-tag {
+      font-size: 0.6rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-top: auto;
+    }
+
+    .card-tag.chart { color: var(--light); }
+    .card-tag.canvas { color: var(--rem); }
+    .card-tag.interactive { color: var(--awake); }
+
+    .card::after {
+      content: '\2192';
+      position: absolute;
+      top: 1.5rem;
+      right: 1.5rem;
+      color: var(--text-dim);
+      font-size: 1rem;
+      opacity: 0;
+      transform: translateX(-4px);
+      transition: all var(--transition);
+    }
+
+    .card:hover::after {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .divider {
+      height: 1px;
+      background: var(--border-subtle);
+      margin: 1rem 0;
+    }
+
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 2.4rem; }
+      .grid { grid-template-columns: 1fr; }
+      .meta-strip { flex-wrap: wrap; gap: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="hero">
+      <h1>Sleep <em>Visualized</em></h1>
+      <p class="subtitle">180 nights of Garmin sleep data — stages, heart rate, movement, stress, body battery, and respiration — explored through 23 different visual perspectives.</p>
+      <div class="meta-strip" id="meta"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Data Art</h2>
+        <span class="section-count">6 visualizations</span>
+      </div>
+      <div class="grid">
+        <a href="pages/sleep-barcode.html" class="card">
+          <div class="card-title">Sleep Barcode</div>
+          <div class="card-desc">6 months compressed into stacked color strips. Each row = one night, color = sleep stage. Maximum data density.</div>
+          <div class="card-tag canvas">Canvas</div>
+        </a>
+        <a href="pages/ridgeline.html" class="card">
+          <div class="card-title">Ridgeline Plot</div>
+          <div class="card-desc">Joy Division-style stacked heart rate curves. 180 nights layered into a wave-like topographic image.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/movement-topography.html" class="card">
+          <div class="card-title">Movement Topography</div>
+          <div class="card-desc">Minute-by-minute movement rendered as a terrain heatmap. Restless periods form mountain ranges.</div>
+          <div class="card-tag canvas">Canvas</div>
+        </a>
+        <a href="pages/sleep-garden.html" class="card">
+          <div class="card-title">Sleep Garden</div>
+          <div class="card-desc">Each night as a flower glyph. Petals = sleep stages, length = duration. A garden you can scan for patterns.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/tree-rings.html" class="card">
+          <div class="card-title">Tree Rings</div>
+          <div class="card-desc">Each night = one ring in a cross-section. Color by stage, thickness by sleep quality. A fingerprint of your sleep.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/mondrian.html" class="card">
+          <div class="card-title">Mondrian Grid</div>
+          <div class="card-desc">Sleep stages mapped to colored rectangles in a grid. Each night becomes a Mondrian-esque composition.</div>
+          <div class="card-tag canvas">Canvas</div>
+        </a>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Analytical</h2>
+        <span class="section-count">9 visualizations</span>
+      </div>
+      <div class="grid">
+        <a href="pages/radial-clock.html" class="card">
+          <div class="card-title">24-Hour Radial Clock</div>
+          <div class="card-desc">Sleep mapped onto a polar chart. Angle = time of day. Reveals chronotype and bedtime drift at a glance.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/horizon-chart.html" class="card">
+          <div class="card-title">Horizon Chart</div>
+          <div class="card-desc">One row per night, stacked vertically. The classic raster plot — consistent bedtimes form vertical edges.</div>
+          <div class="card-tag canvas">Canvas</div>
+        </a>
+        <a href="pages/weekday-fingerprint.html" class="card">
+          <div class="card-title">Weekday Fingerprint</div>
+          <div class="card-desc">Overlay all Mondays, Tuesdays, etc. Reveals social jet lag and weekly sleep rhythm patterns.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/hypnogram.html" class="card">
+          <div class="card-title">Enhanced Hypnogram</div>
+          <div class="card-desc">Clinical sleep stage chart with HR, stress, body battery, and respiration overlaid. All channels at once.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/sankey.html" class="card">
+          <div class="card-title">Stage Transitions</div>
+          <div class="card-desc">Sankey diagram of sleep stage transitions. Flow widths show how often you cycle between stages.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/sleep-wave.html" class="card">
+          <div class="card-title">Sleep Cycle Wave</div>
+          <div class="card-desc">Smooth interpolated wave of sleep stages. Each 90-min ultradian cycle becomes a visible crest.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/hr-valley.html" class="card">
+          <div class="card-title">Heart Rate Valley</div>
+          <div class="card-desc">Nightly HR as an inverted area chart. The deepest valley = your lowest resting HR. Recovery shape analysis.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/body-battery.html" class="card">
+          <div class="card-title">Body Battery Curve</div>
+          <div class="card-desc">Charging visualization with rate-of-recovery color encoding. Flat = poor recovery, steep = excellent.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/weekday-heatmap.html" class="card">
+          <div class="card-title">Weekday Heatmap</div>
+          <div class="card-desc">7 columns &times; N weeks grid. Each cell colored by a sleep metric. Shows weekend vs weekday patterns.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Comparative</h2>
+        <span class="section-count">5 visualizations</span>
+      </div>
+      <div class="grid">
+        <a href="pages/small-multiples.html" class="card">
+          <div class="card-title">Small Multiples</div>
+          <div class="card-desc">One mini chart per night in a grid. Spot outliers instantly — the bad nights jump right out.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/scatter-matrix.html" class="card">
+          <div class="card-title">Scatter Matrix</div>
+          <div class="card-desc">Multi-dimensional scatter plots comparing sleep metrics. Find personal correlations in your own data.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/stress-timeline.html" class="card">
+          <div class="card-title">Stress &ndash; Sleep Timeline</div>
+          <div class="card-desc">Dual axis timeline with stress and sleep metrics connected by recovery-colored lines.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/waffle-chart.html" class="card">
+          <div class="card-title">Efficiency Waffle</div>
+          <div class="card-desc">10&times;10 grid per night. Filled squares = sleep, empty = awake. A tactile view of sleep efficiency.</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+        <a href="pages/chronotype-radar.html" class="card">
+          <div class="card-title">Chronotype Radar</div>
+          <div class="card-desc">Spider chart of your sleep profile vs published chronotype profiles. Are you a wolf or a bear?</div>
+          <div class="card-tag chart">D3 / SVG</div>
+        </a>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Interactive</h2>
+        <span class="section-count">3 visualizations</span>
+      </div>
+      <div class="grid">
+        <a href="pages/night-explorer.html" class="card">
+          <div class="card-title">Night Explorer</div>
+          <div class="card-desc">Click any night to expand a full multi-channel view. Overview first, details on demand.</div>
+          <div class="card-tag interactive">Interactive</div>
+        </a>
+        <a href="pages/sleep-mixer.html" class="card">
+          <div class="card-title">Sleep DJ Mixer</div>
+          <div class="card-desc">Filter nights by criteria with sliders. "Show me only nights with &gt;90min deep sleep."</div>
+          <div class="card-tag interactive">Interactive</div>
+        </a>
+        <a href="pages/sleep-playback.html" class="card">
+          <div class="card-title">Sleep Playback</div>
+          <div class="card-desc">Animated time-lapse of a single night. Watch sleep stages, HR, and body battery unfold in real-time.</div>
+          <div class="card-tag interactive">Interactive</div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="shared/utils.js"></script>
+  <script>
+    loadData('summary.json').then(data => {
+      const valid = data.filter(d => d.totalSleep > 0);
+      const avgSleep = d3.mean(valid, d => d.totalSleep);
+      const avgDeep = d3.mean(valid, d => d.deep);
+      const avgREM = d3.mean(valid, d => d.rem);
+      const avgEfficiency = d3.mean(valid, d => d.efficiency);
+      const dateRange = `${formatDate(valid[0].date)} — ${formatDate(valid[valid.length-1].date)}`;
+
+      document.getElementById('meta').innerHTML = `
+        <div class="meta-item">
+          <span class="meta-value">${valid.length}</span>
+          <span class="meta-label">Nights tracked</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-value">${dateRange}</span>
+          <span class="meta-label">Date range</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-value">${formatDuration(avgSleep)}</span>
+          <span class="meta-label">Avg sleep</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-value">${formatDuration(avgDeep)}</span>
+          <span class="meta-label">Avg deep</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-value">${formatDuration(avgREM)}</span>
+          <span class="meta-label">Avg REM</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-value">${Math.round(avgEfficiency)}%</span>
+          <span class="meta-label">Avg efficiency</span>
+        </div>
+      `;
+    });
+  </script>
+</body>
+</html>

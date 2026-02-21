@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Small Multiples — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .grid-container {
+      position: relative;
+    }
+
+    .month-header {
+      font-family: var(--font-display);
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      margin-top: 1.5rem;
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .month-header:first-child {
+      margin-top: 0;
+    }
+
+    .month-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .cell {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: default;
+      border-radius: 3px;
+      padding: 2px 2px 0;
+      transition: background var(--transition);
+    }
+
+    .cell:hover {
+      background: var(--bg-hover);
+    }
+
+    .cell-label {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      color: var(--text-dim);
+      line-height: 1;
+      margin-top: 1px;
+      user-select: none;
+    }
+
+    .cell:hover .cell-label {
+      color: var(--text-muted);
+    }
+
+    .controls-group {
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .control-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-right: 0.25rem;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Small <em>Multiples</em>',
+      'One mini chart per night in a scannable grid. Bad nights — short, fragmented — visually stand out among the good.',
+      'Comparative'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="controls controls-group">
+        <div>
+          <span class="control-label">View</span>
+          <button class="control-btn active" data-view="bars">Bars</button>
+          <button class="control-btn" data-view="radial">Radial</button>
+        </div>
+        <div>
+          <span class="control-label">Sort</span>
+          <button class="control-btn active" data-sort="chrono">Chronological</button>
+          <button class="control-btn" data-sort="sleep">Total Sleep</button>
+          <button class="control-btn" data-sort="efficiency">Efficiency</button>
+        </div>
+      </div>
+      <div class="viz-container">
+        <div class="grid-container"><div class="loading">Loading sleep data</div></div>
+      </div>
+    `;
+
+    const container = root.querySelector('.viz-container');
+    const gridEl = root.querySelector('.grid-container');
+
+    const CELL_W = 60;
+    const CELL_H = 20;
+    const TIME_MIN = 21;
+    const TIME_MAX = 33;
+
+    const COLORS = {
+      0: '#2563eb',
+      1: '#5b9bd5',
+      2: '#c45a8a',
+      3: '#d4a54a',
+      '-1': '#3a3a4a',
+    };
+
+    let currentView = 'bars';
+    let currentSort = 'chrono';
+
+    Promise.all([loadData('levels.json'), loadData('summary.json')]).then(([levels, summary]) => {
+      const byDate = d3.group(levels, d => d.date);
+      const summaryMap = new Map(summary.map(s => [s.date, s]));
+
+      const dates = [...byDate.keys()].sort();
+
+      const nights = dates.map(date => {
+        const segments = byDate.get(date);
+        const sum = summaryMap.get(date);
+        return {
+          date,
+          segments,
+          totalSleep: sum ? sum.totalSleep : 0,
+          efficiency: sum ? sum.efficiency : 0,
+          bedtime: sum ? sum.bedtime : null,
+          waketime: sum ? sum.waketime : null,
+          deep: sum ? sum.deep : 0,
+          light: sum ? sum.light : 0,
+          rem: sum ? sum.rem : 0,
+          awake: sum ? sum.awake : 0,
+        };
+      });
+
+      const tip = createTooltip(container);
+
+      function sortNights(mode) {
+        const sorted = [...nights];
+        if (mode === 'sleep') sorted.sort((a, b) => b.totalSleep - a.totalSleep);
+        else if (mode === 'efficiency') sorted.sort((a, b) => b.efficiency - a.efficiency);
+        return sorted;
+      }
+
+      function tooltipHtml(n) {
+        return `
+          <div class="tooltip-label">${formatDateLong(n.date)}</div>
+          <div class="tooltip-value">${formatDuration(n.totalSleep)}</div>
+          <div style="font-size:0.65rem;color:var(--text-dim);margin-top:2px">
+            Deep ${formatDuration(n.deep)} &middot; Light ${formatDuration(n.light)}<br>
+            REM ${formatDuration(n.rem)} &middot; Awake ${formatDuration(n.awake)}<br>
+            ${n.bedtime != null ? `${formatHour(n.bedtime)} &rarr; ${formatHour(n.waketime)}` : ''}
+            ${n.efficiency ? ` &middot; ${n.efficiency.toFixed(0)}% eff` : ''}
+          </div>`;
+      }
+
+      function drawBars(svg, segments) {
+        const xScale = d3.scaleLinear().domain([TIME_MIN, TIME_MAX]).range([0, CELL_W]);
+        segments.forEach(seg => {
+          const x1 = xScale(Math.max(seg.start, TIME_MIN));
+          const x2 = xScale(Math.min(seg.end, TIME_MAX));
+          if (x2 <= x1) return;
+          svg.append('rect')
+            .attr('x', x1)
+            .attr('y', 0)
+            .attr('width', x2 - x1)
+            .attr('height', CELL_H)
+            .attr('fill', COLORS[seg.stage] || COLORS['-1'])
+            .attr('rx', 1);
+        });
+      }
+
+      function drawRadial(svg, segments) {
+        const cx = CELL_W / 2;
+        const cy = CELL_H / 2;
+        const r = Math.min(cx, cy) - 1;
+        const angleScale = d3.scaleLinear().domain([TIME_MIN, TIME_MAX]).range([0, Math.PI * 2]);
+
+        const arc = d3.arc()
+          .innerRadius(r * 0.35)
+          .outerRadius(r);
+
+        segments.forEach(seg => {
+          const start = Math.max(seg.start, TIME_MIN);
+          const end = Math.min(seg.end, TIME_MAX);
+          if (end <= start) return;
+          svg.append('path')
+            .attr('transform', `translate(${cx},${cy})`)
+            .attr('d', arc({ startAngle: angleScale(start), endAngle: angleScale(end) }))
+            .attr('fill', COLORS[seg.stage] || COLORS['-1']);
+        });
+      }
+
+      function render() {
+        gridEl.innerHTML = '';
+        const sorted = sortNights(currentSort);
+        const grouped = currentSort === 'chrono';
+
+        if (grouped) {
+          const byMonth = d3.group(sorted, n => {
+            const d = new Date(n.date + 'T12:00:00');
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          });
+
+          for (const [monthKey, monthNights] of byMonth) {
+            const d = new Date(monthKey + '-15T12:00:00');
+            const label = d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+
+            const header = document.createElement('div');
+            header.className = 'month-header';
+            header.textContent = label;
+            gridEl.appendChild(header);
+
+            const row = document.createElement('div');
+            row.className = 'month-row';
+            gridEl.appendChild(row);
+
+            monthNights.forEach(n => renderCell(row, n));
+          }
+        } else {
+          const row = document.createElement('div');
+          row.className = 'month-row';
+          gridEl.appendChild(row);
+          sorted.forEach(n => renderCell(row, n));
+        }
+      }
+
+      function renderCell(parent, n) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+
+        const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svgEl.setAttribute('width', CELL_W);
+        svgEl.setAttribute('height', CELL_H);
+        svgEl.style.display = 'block';
+        svgEl.style.borderRadius = '2px';
+        svgEl.style.overflow = 'hidden';
+        cell.appendChild(svgEl);
+
+        const svg = d3.select(svgEl);
+
+        svg.append('rect')
+          .attr('width', CELL_W)
+          .attr('height', CELL_H)
+          .attr('fill', 'rgba(255,255,255,0.02)');
+
+        if (currentView === 'bars') {
+          drawBars(svg, n.segments);
+        } else {
+          drawRadial(svg, n.segments);
+        }
+
+        const dayNum = new Date(n.date + 'T12:00:00').getDate();
+        const label = document.createElement('div');
+        label.className = 'cell-label';
+        label.textContent = dayNum;
+        cell.appendChild(label);
+
+        cell.addEventListener('mouseenter', (e) => {
+          const rect = container.getBoundingClientRect();
+          const cellRect = cell.getBoundingClientRect();
+          const x = cellRect.left - rect.left + cellRect.width / 2;
+          const y = cellRect.top - rect.top;
+          tip.show(tooltipHtml(n), x, y);
+        });
+
+        cell.addEventListener('mouseleave', () => tip.hide());
+
+        parent.appendChild(cell);
+      }
+
+      // controls
+      root.querySelectorAll('[data-view]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          root.querySelectorAll('[data-view]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          currentView = btn.dataset.view;
+          render();
+        });
+      });
+
+      root.querySelectorAll('[data-sort]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          root.querySelectorAll('[data-sort]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          currentSort = btn.dataset.sort;
+          render();
+        });
+      });
+
+      render();
+      makeLegend(container);
+    });
+  </script>
+</body>
+</html>

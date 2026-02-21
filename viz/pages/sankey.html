@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stage Transitions — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .heatmap-grid {
+      display: grid;
+      grid-template-columns: auto repeat(4, 1fr);
+      grid-template-rows: auto repeat(4, 1fr);
+      gap: 3px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    .heatmap-cell {
+      aspect-ratio: 1;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text);
+      position: relative;
+      min-height: 60px;
+      cursor: default;
+      transition: transform var(--transition);
+    }
+    .heatmap-cell:hover { transform: scale(1.05); }
+    .heatmap-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      padding: 0.25rem;
+    }
+    .heatmap-label.row-label { justify-content: flex-end; padding-right: 0.6rem; }
+    .corner-label {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .sankey-overlay { margin-top: 2rem; }
+    .flow-section { display: flex; gap: 2rem; margin-top: 2rem; }
+    .flow-section > div { flex: 1; }
+    @media (max-width: 768px) {
+      .flow-section { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Stage <em>Transitions</em>',
+      'How sleep stages flow into one another — a transition matrix with Sankey flows showing the frequency of every stage-to-stage change across all nights.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="stats-row" id="stats-row"></div>
+      <div class="flow-section">
+        <div class="viz-container">
+          <p class="section-label">Transition Matrix</p>
+          <div id="heatmap"></div>
+        </div>
+        <div class="viz-container">
+          <p class="section-label">Transition Flows</p>
+          <div class="viz-canvas" id="sankey-canvas">
+            <div class="loading">Loading sleep data</div>
+          </div>
+        </div>
+      </div>
+      <div class="viz-container" style="margin-top: 1.5rem;">
+        <div id="legend-container"></div>
+      </div>
+    `;
+
+    const STAGES = [0, 1, 2, 3];
+    const STAGE_LABELS = { 0: 'Deep', 1: 'Light', 2: 'REM', 3: 'Awake' };
+    const STAGE_CLR = { 0: '#2563eb', 1: '#5b9bd5', 2: '#c45a8a', 3: '#d4a54a' };
+
+    loadData('levels.json').then(levels => {
+      const byDate = d3.group(levels, d => d.date);
+      const dates = [...byDate.keys()].sort();
+
+      const matrix = {};
+      STAGES.forEach(a => { matrix[a] = {}; STAGES.forEach(b => { matrix[a][b] = 0; }); });
+
+      let totalTransitions = 0;
+      let nightsWithTransitions = 0;
+
+      dates.forEach(date => {
+        const segs = byDate.get(date).sort((a, b) => a.start - b.start);
+        let nightCount = 0;
+        for (let i = 0; i < segs.length - 1; i++) {
+          const from = segs[i].stage;
+          const to = segs[i + 1].stage;
+          if (from < 0 || to < 0) continue;
+          if (matrix[from] && matrix[from][to] !== undefined) {
+            matrix[from][to]++;
+            totalTransitions++;
+            nightCount++;
+          }
+        }
+        if (nightCount > 0) nightsWithTransitions++;
+      });
+
+      let maxCount = 0;
+      let mostCommonFrom = 0, mostCommonTo = 0;
+      STAGES.forEach(a => STAGES.forEach(b => {
+        if (matrix[a][b] > maxCount) {
+          maxCount = matrix[a][b];
+          mostCommonFrom = a;
+          mostCommonTo = b;
+        }
+      }));
+
+      const avgPerNight = nightsWithTransitions > 0
+        ? (totalTransitions / nightsWithTransitions).toFixed(1)
+        : '0';
+
+      document.getElementById('stats-row').innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${totalTransitions.toLocaleString()}</div>
+          <div class="stat-label">Total Transitions</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${STAGE_LABELS[mostCommonFrom]} → ${STAGE_LABELS[mostCommonTo]}</div>
+          <div class="stat-label">Most Common (${maxCount.toLocaleString()}×)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgPerNight}</div>
+          <div class="stat-label">Avg Per Night</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${nightsWithTransitions}</div>
+          <div class="stat-label">Nights Analyzed</div>
+        </div>
+      `;
+
+      // --- Heatmap ---
+      const heatmap = document.getElementById('heatmap');
+      const allCounts = STAGES.flatMap(a => STAGES.map(b => matrix[a][b]));
+      const cMax = d3.max(allCounts);
+      const colorScale = d3.scaleSequential(d3.interpolateViridis).domain([0, cMax]);
+
+      const corner = document.createElement('div');
+      corner.className = 'heatmap-label';
+      corner.innerHTML = '<span class="corner-label">from \\ to</span>';
+      heatmap.appendChild(corner);
+      heatmap.className = 'heatmap-grid';
+
+      STAGES.forEach(to => {
+        const lbl = document.createElement('div');
+        lbl.className = 'heatmap-label';
+        lbl.textContent = STAGE_LABELS[to];
+        lbl.style.color = STAGE_CLR[to];
+        heatmap.appendChild(lbl);
+      });
+
+      STAGES.forEach(from => {
+        const rowLabel = document.createElement('div');
+        rowLabel.className = 'heatmap-label row-label';
+        rowLabel.textContent = STAGE_LABELS[from];
+        rowLabel.style.color = STAGE_CLR[from];
+        heatmap.appendChild(rowLabel);
+
+        STAGES.forEach(to => {
+          const cell = document.createElement('div');
+          cell.className = 'heatmap-cell';
+          const count = matrix[from][to];
+          const intensity = cMax > 0 ? count / cMax : 0;
+          cell.style.background = colorScale(count);
+          cell.style.color = intensity > 0.6 ? '#0a0a0f' : 'var(--text)';
+          cell.textContent = count;
+          cell.title = `${STAGE_LABELS[from]} → ${STAGE_LABELS[to]}: ${count}`;
+          heatmap.appendChild(cell);
+        });
+      });
+
+      // --- Sankey flows ---
+      const sankeyCanvas = document.getElementById('sankey-canvas');
+      sankeyCanvas.innerHTML = '';
+
+      const width = 500;
+      const height = 400;
+      const margin = { top: 30, right: 80, bottom: 20, left: 80 };
+      const innerW = width - margin.left - margin.right;
+      const innerH = height - margin.top - margin.bottom;
+
+      const svg = d3.select(sankeyCanvas)
+        .append('svg')
+        .attr('viewBox', `0 0 ${width} ${height}`)
+        .attr('width', '100%')
+        .attr('preserveAspectRatio', 'xMidYMid meet');
+
+      const g = svg.append('g')
+        .attr('transform', `translate(${margin.left},${margin.top})`);
+
+      const nodeH = innerH / STAGES.length;
+      const nodePad = 8;
+      const nodeW = 18;
+
+      const srcTotals = {};
+      const dstTotals = {};
+      STAGES.forEach(s => {
+        srcTotals[s] = d3.sum(STAGES, t => matrix[s][t]);
+        dstTotals[s] = d3.sum(STAGES, t => matrix[t][s]);
+      });
+
+      const maxSrc = d3.max(STAGES, s => srcTotals[s]);
+      const maxDst = d3.max(STAGES, s => dstTotals[s]);
+      const barScale = d3.scaleLinear().domain([0, Math.max(maxSrc, maxDst)]).range([20, nodeH - nodePad]);
+
+      function srcY(stage) {
+        const idx = STAGES.indexOf(stage);
+        const center = idx * nodeH + nodeH / 2;
+        return center - barScale(srcTotals[stage]) / 2;
+      }
+
+      function dstY(stage) {
+        const idx = STAGES.indexOf(stage);
+        const center = idx * nodeH + nodeH / 2;
+        return center - barScale(dstTotals[stage]) / 2;
+      }
+
+      STAGES.forEach(s => {
+        const srcBarH = barScale(srcTotals[s]);
+        g.append('rect')
+          .attr('x', 0)
+          .attr('y', srcY(s))
+          .attr('width', nodeW)
+          .attr('height', srcBarH)
+          .attr('rx', 3)
+          .attr('fill', STAGE_CLR[s])
+          .attr('opacity', 0.85);
+
+        g.append('text')
+          .attr('x', -8)
+          .attr('y', srcY(s) + srcBarH / 2)
+          .attr('text-anchor', 'end')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', STAGE_CLR[s])
+          .attr('font-size', '11px')
+          .attr('font-weight', 500)
+          .text(STAGE_LABELS[s]);
+
+        const dstBarH = barScale(dstTotals[s]);
+        g.append('rect')
+          .attr('x', innerW - nodeW)
+          .attr('y', dstY(s))
+          .attr('width', nodeW)
+          .attr('height', dstBarH)
+          .attr('rx', 3)
+          .attr('fill', STAGE_CLR[s])
+          .attr('opacity', 0.85);
+
+        g.append('text')
+          .attr('x', innerW + 8)
+          .attr('y', dstY(s) + dstBarH / 2)
+          .attr('text-anchor', 'start')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', STAGE_CLR[s])
+          .attr('font-size', '11px')
+          .attr('font-weight', 500)
+          .text(STAGE_LABELS[s]);
+      });
+
+      const srcOffsets = {};
+      const dstOffsets = {};
+      STAGES.forEach(s => { srcOffsets[s] = 0; dstOffsets[s] = 0; });
+
+      const flows = [];
+      STAGES.forEach(from => {
+        STAGES.forEach(to => {
+          if (matrix[from][to] === 0) return;
+          flows.push({ from, to, count: matrix[from][to] });
+        });
+      });
+      flows.sort((a, b) => b.count - a.count);
+
+      const tip = createTooltip(sankeyCanvas.closest('.viz-container'));
+
+      flows.forEach(({ from, to, count }) => {
+        const srcBarH = barScale(srcTotals[from]);
+        const dstBarH = barScale(dstTotals[to]);
+        const flowSrcH = srcTotals[from] > 0 ? (count / srcTotals[from]) * srcBarH : 0;
+        const flowDstH = dstTotals[to] > 0 ? (count / dstTotals[to]) * dstBarH : 0;
+
+        const y0 = srcY(from) + srcOffsets[from];
+        const y1 = dstY(to) + dstOffsets[to];
+        srcOffsets[from] += flowSrcH;
+        dstOffsets[to] += flowDstH;
+
+        const x0 = nodeW;
+        const x1 = innerW - nodeW;
+        const midX = (x0 + x1) / 2;
+
+        const path = d3.path();
+        path.moveTo(x0, y0);
+        path.bezierCurveTo(midX, y0, midX, y1, x1, y1);
+        path.lineTo(x1, y1 + flowDstH);
+        path.bezierCurveTo(midX, y1 + flowDstH, midX, y0 + flowSrcH, x0, y0 + flowSrcH);
+        path.closePath();
+
+        g.append('path')
+          .attr('d', path.toString())
+          .attr('fill', STAGE_CLR[from])
+          .attr('fill-opacity', 0.18)
+          .attr('stroke', STAGE_CLR[from])
+          .attr('stroke-opacity', 0.3)
+          .attr('stroke-width', 0.5)
+          .on('mouseenter', function (e) {
+            d3.select(this).attr('fill-opacity', 0.4).attr('stroke-opacity', 0.7);
+            const rect = sankeyCanvas.closest('.viz-container').getBoundingClientRect();
+            tip.show(
+              `<div class="tooltip-label">${STAGE_LABELS[from]} → ${STAGE_LABELS[to]}</div>` +
+              `<div class="tooltip-value">${count.toLocaleString()} transitions</div>`,
+              e.clientX - rect.left, e.clientY - rect.top
+            );
+          })
+          .on('mouseleave', function () {
+            d3.select(this).attr('fill-opacity', 0.18).attr('stroke-opacity', 0.3);
+            tip.hide();
+          });
+      });
+
+      g.append('text')
+        .attr('x', innerW / 2)
+        .attr('y', -12)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'var(--text-dim)')
+        .attr('font-size', '10px')
+        .attr('font-family', 'var(--font-mono)')
+        .text('source → destination');
+
+      makeLegend(document.getElementById('legend-container'));
+    });
+  </script>
+</body>
+</html>

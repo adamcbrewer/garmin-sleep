@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Movement Topography — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .viz-container { padding: 0; overflow: visible; }
+
+    .topo-wrapper {
+      position: relative;
+      overflow-x: auto;
+    }
+
+    canvas { display: block; }
+
+    .color-scale {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+      padding: 1rem 2rem;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .color-scale-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+
+    .color-scale-bar {
+      height: 10px;
+      flex: 1;
+      max-width: 240px;
+      border-radius: 2px;
+    }
+
+    .color-scale-ticks {
+      display: flex;
+      justify-content: space-between;
+      flex: 1;
+      max-width: 240px;
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      color: var(--text-dim);
+    }
+
+    .stats-row { margin: 0 0 2rem; }
+  </style>
+</head>
+<body>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Movement <em>Topography</em>',
+      'Minute-by-minute sleep movement rendered as a terrain heatmap. Valleys of stillness, ridges of restlessness \u2014 a topographic map of 139 nights.',
+      'Data Art'
+    );
+  </script>
+
+  <script>
+    const COLOR_STOPS = [
+      [0.0, [10, 10, 15]],
+      [1.0, [13, 27, 62]],
+      [2.0, [26, 74, 110]],
+      [3.0, [42, 138, 138]],
+      [4.0, [90, 184, 138]],
+      [5.0, [196, 216, 74]],
+      [6.5, [245, 240, 224]],
+    ];
+
+    function activityColor(v) {
+      const clamped = Math.min(v, 6.5);
+      let lo = COLOR_STOPS[0], hi = COLOR_STOPS[COLOR_STOPS.length - 1];
+      for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
+        if (clamped >= COLOR_STOPS[i][0] && clamped <= COLOR_STOPS[i + 1][0]) {
+          lo = COLOR_STOPS[i];
+          hi = COLOR_STOPS[i + 1];
+          break;
+        }
+      }
+      const t = hi[0] === lo[0] ? 0 : (clamped - lo[0]) / (hi[0] - lo[0]);
+      return [
+        Math.round(lo[1][0] + t * (hi[1][0] - lo[1][0])),
+        Math.round(lo[1][1] + t * (hi[1][1] - lo[1][1])),
+        Math.round(lo[1][2] + t * (hi[1][2] - lo[1][2])),
+      ];
+    }
+
+    const ROW_HEIGHT = 5;
+    const MARGIN = { top: 40, right: 30, bottom: 20, left: 80 };
+    const TIME_MIN = 20;
+    const TIME_MAX = 33;
+    const MINUTES_PER_HOUR = 60;
+
+    loadData('movement.json').then(data => {
+      data.sort((a, b) => a.date.localeCompare(b.date));
+
+      const totalMinutes = (TIME_MAX - TIME_MIN) * MINUTES_PER_HOUR;
+      const canvasWidth = MARGIN.left + totalMinutes + MARGIN.right;
+      const canvasHeight = MARGIN.top + data.length * ROW_HEIGHT + MARGIN.bottom;
+
+      const root = document.getElementById('viz-root');
+
+      const statsRow = document.createElement('div');
+      statsRow.className = 'stats-row';
+      const avgPoints = Math.round(d3.mean(data, d => d.data.length));
+      const maxV = d3.max(data, d => d3.max(d.data, p => p.v));
+      const avgV = d3.mean(data, d => d3.mean(d.data, p => p.v));
+      statsRow.innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${data.length}</div>
+          <div class="stat-label">Nights</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgPoints}</div>
+          <div class="stat-label">Avg readings / night</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${maxV.toFixed(1)}</div>
+          <div class="stat-label">Peak activity</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgV.toFixed(2)}</div>
+          <div class="stat-label">Avg activity</div>
+        </div>
+      `;
+      root.appendChild(statsRow);
+
+      const container = document.createElement('div');
+      container.className = 'viz-container';
+      root.appendChild(container);
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'topo-wrapper';
+      container.appendChild(wrapper);
+
+      const canvas = document.createElement('canvas');
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = canvasWidth * dpr;
+      canvas.height = canvasHeight * dpr;
+      canvas.style.width = canvasWidth + 'px';
+      canvas.style.height = canvasHeight + 'px';
+      wrapper.appendChild(canvas);
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      const imageData = ctx.createImageData(totalMinutes, data.length);
+      const pixels = imageData.data;
+
+      for (let row = 0; row < data.length; row++) {
+        const night = data[row];
+        const lookup = new Float32Array(totalMinutes);
+
+        for (const p of night.data) {
+          const minuteIdx = Math.round((p.h - TIME_MIN) * MINUTES_PER_HOUR);
+          if (minuteIdx >= 0 && minuteIdx < totalMinutes) {
+            lookup[minuteIdx] = Math.max(lookup[minuteIdx], p.v);
+          }
+        }
+
+        for (let col = 0; col < totalMinutes; col++) {
+          const idx = (row * totalMinutes + col) * 4;
+          const rgb = activityColor(lookup[col]);
+          pixels[idx] = rgb[0];
+          pixels[idx + 1] = rgb[1];
+          pixels[idx + 2] = rgb[2];
+          pixels[idx + 3] = 255;
+        }
+      }
+
+      const offscreen = document.createElement('canvas');
+      offscreen.width = totalMinutes;
+      offscreen.height = data.length;
+      const offCtx = offscreen.getContext('2d');
+      offCtx.putImageData(imageData, 0, 0);
+
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(
+        offscreen,
+        0, 0, totalMinutes, data.length,
+        MARGIN.left, MARGIN.top, totalMinutes, data.length * ROW_HEIGHT
+      );
+
+      ctx.font = '11px "DM Sans", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#5a5870';
+
+      for (let h = TIME_MIN; h <= TIME_MAX; h++) {
+        const x = MARGIN.left + (h - TIME_MIN) * MINUTES_PER_HOUR;
+        const displayH = h % 24;
+        const label = formatHour(displayH);
+
+        ctx.fillStyle = '#5a5870';
+        ctx.fillText(label, x, 8);
+
+        ctx.strokeStyle = 'rgba(42, 42, 58, 0.5)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, MARGIN.top);
+        ctx.lineTo(x, MARGIN.top + data.length * ROW_HEIGHT);
+        ctx.stroke();
+      }
+
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.font = '10px "DM Sans", sans-serif';
+
+      let lastMonth = '';
+      for (let row = 0; row < data.length; row++) {
+        const d = new Date(data[row].date + 'T12:00:00');
+        const month = d.toLocaleDateString('en-GB', { month: 'short' });
+        const day = d.getDate();
+        const y = MARGIN.top + row * ROW_HEIGHT + ROW_HEIGHT / 2;
+
+        if (day === 1 || (row === 0 && day <= 7)) {
+          ctx.fillStyle = '#8a889a';
+          ctx.fillText(`${month} ${day}`, MARGIN.left - 8, y);
+
+          ctx.strokeStyle = 'rgba(138, 136, 154, 0.3)';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(MARGIN.left, MARGIN.top + row * ROW_HEIGHT);
+          ctx.lineTo(MARGIN.left + totalMinutes, MARGIN.top + row * ROW_HEIGHT);
+          ctx.stroke();
+        } else if (day % 7 === 0) {
+          ctx.fillStyle = '#5a5870';
+          ctx.fillText(`${day}`, MARGIN.left - 8, y);
+        }
+      }
+
+      const scaleDiv = document.createElement('div');
+      scaleDiv.className = 'color-scale';
+
+      const gradient = document.createElement('canvas');
+      gradient.width = 240;
+      gradient.height = 10;
+      const gCtx = gradient.getContext('2d');
+      for (let x = 0; x < 240; x++) {
+        const v = (x / 239) * 6.5;
+        const rgb = activityColor(v);
+        gCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+        gCtx.fillRect(x, 0, 1, 10);
+      }
+
+      scaleDiv.innerHTML = `
+        <span class="color-scale-label">Activity Level</span>
+        <div style="flex:1; max-width:240px;">
+          <div class="color-scale-bar" style="background-image: url(${gradient.toDataURL()})"></div>
+          <div class="color-scale-ticks">
+            <span>0 still</span>
+            <span>2</span>
+            <span>4</span>
+            <span>6+</span>
+          </div>
+        </div>
+      `;
+      container.appendChild(scaleDiv);
+
+      const tooltip = createTooltip(wrapper);
+
+      canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvasWidth / rect.width;
+        const scaleY = canvasHeight / rect.height;
+        const mx = (e.clientX - rect.left) * scaleX;
+        const my = (e.clientY - rect.top) * scaleY;
+
+        const col = mx - MARGIN.left;
+        const row = Math.floor((my - MARGIN.top) / ROW_HEIGHT);
+
+        if (col < 0 || col >= totalMinutes || row < 0 || row >= data.length) {
+          tooltip.hide();
+          return;
+        }
+
+        const night = data[row];
+        const hour = TIME_MIN + col / MINUTES_PER_HOUR;
+        const minuteIdx = Math.round(col);
+        const pixelRow = row;
+        const idx = (pixelRow * totalMinutes + minuteIdx) * 4;
+
+        let val = 0;
+        const lookup = new Float32Array(totalMinutes);
+        for (const p of night.data) {
+          const mIdx = Math.round((p.h - TIME_MIN) * MINUTES_PER_HOUR);
+          if (mIdx >= 0 && mIdx < totalMinutes) {
+            lookup[mIdx] = Math.max(lookup[mIdx], p.v);
+          }
+        }
+        val = lookup[minuteIdx] || 0;
+
+        const dateStr = formatDateLong(night.date);
+        const timeStr = formatHour(hour % 24);
+
+        tooltip.show(
+          `<div class="tooltip-label">${dateStr}</div>
+           <div class="tooltip-value">${timeStr} &mdash; activity: ${val.toFixed(2)}</div>`,
+          e.clientX - wrapper.getBoundingClientRect().left,
+          e.clientY - wrapper.getBoundingClientRect().top
+        );
+      });
+
+      canvas.addEventListener('mouseleave', () => tooltip.hide());
+    });
+  </script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</body>
+</html>

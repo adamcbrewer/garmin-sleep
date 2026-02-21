@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sleep Playback — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .playback-layout {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .playback-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .play-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      background: rgba(139, 92, 246, 0.15);
+      color: var(--accent);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition);
+      flex-shrink: 0;
+    }
+
+    .play-btn:hover {
+      background: rgba(139, 92, 246, 0.3);
+      box-shadow: 0 0 16px rgba(139, 92, 246, 0.3);
+    }
+
+    .play-btn svg {
+      width: 18px;
+      height: 18px;
+      fill: currentColor;
+    }
+
+    .speed-btns {
+      display: flex;
+      gap: 0.25rem;
+    }
+
+    .speed-btn {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      padding: 0.25rem 0.45rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .speed-btn:hover { border-color: var(--accent-muted); color: var(--text); }
+    .speed-btn.active { background: rgba(139, 92, 246, 0.15); border-color: var(--accent); color: var(--accent); }
+
+    .clock-display {
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      color: var(--text-muted);
+      margin-left: auto;
+      padding-right: 0.5rem;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1fr 1.5fr 1fr;
+      grid-template-rows: auto auto;
+      gap: 1.5rem;
+    }
+
+    .dash-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      box-shadow: var(--shadow-card);
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 160px;
+    }
+
+    .dash-panel::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.15), transparent);
+    }
+
+    .panel-label {
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-dim);
+      margin-bottom: 0.5rem;
+      align-self: flex-start;
+    }
+
+    .stage-panel {
+      grid-column: 2;
+      grid-row: 1 / 3;
+      min-height: 280px;
+    }
+
+    .stage-name {
+      font-family: var(--font-display);
+      font-size: 3.5rem;
+      font-weight: 400;
+      line-height: 1;
+      transition: color 0.3s;
+    }
+
+    .stage-sub {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-top: 0.5rem;
+    }
+
+    .clock-panel {
+      grid-column: 1;
+      grid-row: 1;
+    }
+
+    .analog-clock {
+      width: 120px;
+      height: 120px;
+      position: relative;
+    }
+
+    .clock-face {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      position: relative;
+      background: radial-gradient(circle, var(--bg-elevated) 0%, var(--bg-card) 100%);
+    }
+
+    .clock-tick {
+      position: absolute;
+      width: 1px;
+      height: 6px;
+      background: var(--text-dim);
+      top: 4px;
+      left: 50%;
+      transform-origin: 0.5px 56px;
+    }
+
+    .clock-tick.major {
+      height: 10px;
+      width: 2px;
+      background: var(--text-muted);
+      transform-origin: 1px 56px;
+    }
+
+    .clock-hand-hour {
+      position: absolute;
+      width: 3px;
+      height: 30px;
+      background: var(--text);
+      top: 30px;
+      left: calc(50% - 1.5px);
+      transform-origin: 1.5px 30px;
+      border-radius: 2px;
+      transition: transform 0.3s;
+    }
+
+    .clock-hand-minute {
+      position: absolute;
+      width: 2px;
+      height: 42px;
+      background: var(--text-muted);
+      top: 18px;
+      left: calc(50% - 1px);
+      transform-origin: 1px 42px;
+      border-radius: 2px;
+      transition: transform 0.3s;
+    }
+
+    .clock-center {
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      background: var(--accent);
+      border-radius: 50%;
+      top: calc(50% - 3px);
+      left: calc(50% - 3px);
+      box-shadow: 0 0 8px rgba(139, 92, 246, 0.5);
+    }
+
+    .digital-time {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      color: var(--text);
+      margin-top: 0.5rem;
+      letter-spacing: 0.05em;
+    }
+
+    .hr-panel { grid-column: 1; grid-row: 2; }
+
+    .big-number {
+      font-family: var(--font-mono);
+      font-size: 3rem;
+      font-weight: 300;
+      line-height: 1;
+    }
+
+    .big-unit {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-left: 0.25rem;
+    }
+
+    .battery-panel { grid-column: 3; grid-row: 1; }
+
+    .battery-bar-outer {
+      width: 100%;
+      height: 24px;
+      background: var(--bg-elevated);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      margin-top: 0.5rem;
+      position: relative;
+    }
+
+    .battery-bar-inner {
+      height: 100%;
+      background: linear-gradient(90deg, #064e3b, var(--battery-color));
+      border-radius: 12px;
+      transition: width 0.3s;
+      box-shadow: 0 0 12px rgba(34, 197, 94, 0.3);
+    }
+
+    .battery-value {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text);
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+
+    .stress-panel { grid-column: 3; grid-row: 2; }
+
+    .gauge-wrapper {
+      width: 120px;
+      height: 70px;
+      position: relative;
+    }
+
+    .gauge-bg {
+      fill: none;
+      stroke: var(--border);
+      stroke-width: 8;
+    }
+
+    .gauge-fill {
+      fill: none;
+      stroke-width: 8;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.3s, stroke 0.3s;
+    }
+
+    .gauge-value {
+      font-family: var(--font-mono);
+      font-size: 1.2rem;
+      fill: var(--text);
+      text-anchor: middle;
+    }
+
+    .movement-panel {
+      grid-column: 1 / 4;
+      min-height: auto;
+      padding: 1rem 1.5rem;
+      flex-direction: row;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .movement-dots {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+      flex: 1;
+    }
+
+    .movement-dot {
+      width: 4px;
+      height: 16px;
+      border-radius: 2px;
+      background: var(--accent);
+      opacity: 0.15;
+      transition: opacity 0.2s, height 0.2s;
+    }
+
+    .timeline-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1rem 1.5rem;
+      box-shadow: var(--shadow-card);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .timeline-panel::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.15), transparent);
+    }
+
+    .timeline-bar {
+      position: relative;
+      height: 20px;
+      border-radius: 4px;
+      overflow: hidden;
+      background: var(--bg-elevated);
+    }
+
+    .timeline-bar canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .timeline-needle {
+      position: absolute;
+      top: -4px;
+      width: 2px;
+      height: 28px;
+      background: var(--text);
+      box-shadow: 0 0 6px rgba(255,255,255,0.3);
+      border-radius: 1px;
+      transition: left 0.1s;
+    }
+
+    .timeline-labels {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      margin-top: 0.35rem;
+    }
+
+    .no-data-msg {
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 4rem 0;
+    }
+
+    @media (max-width: 768px) {
+      .dashboard {
+        grid-template-columns: 1fr 1fr;
+      }
+      .stage-panel {
+        grid-column: 1 / 3;
+        grid-row: auto;
+        min-height: 160px;
+      }
+      .clock-panel { grid-column: 1; grid-row: auto; }
+      .hr-panel { grid-column: 2; grid-row: auto; }
+      .battery-panel { grid-column: 1; grid-row: auto; }
+      .stress-panel { grid-column: 2; grid-row: auto; }
+      .movement-panel { grid-column: 1 / 3; }
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Sleep <em>Playback</em>',
+      'Animated time-lapse of a single night. Watch sleep stages, heart rate, body battery, and stress unfold in real time.',
+      'Interactive'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="playback-layout">
+        <div class="playback-controls">
+          <select class="control-select" id="night-select"></select>
+          <button class="play-btn" id="play-btn">
+            <svg viewBox="0 0 24 24" id="play-icon"><polygon points="6,3 20,12 6,21"/></svg>
+          </button>
+          <div class="speed-btns" id="speed-btns"></div>
+          <div class="clock-display" id="clock-display">--:--</div>
+        </div>
+        <div class="dashboard" id="dashboard">
+          <div class="dash-panel clock-panel">
+            <div class="panel-label">Time</div>
+            <div class="analog-clock" id="analog-clock">
+              <div class="clock-face" id="clock-face"></div>
+            </div>
+            <div class="digital-time" id="digital-time">--:--</div>
+          </div>
+          <div class="dash-panel stage-panel">
+            <div class="panel-label">Sleep Stage</div>
+            <div class="stage-name" id="stage-name">--</div>
+            <div class="stage-sub" id="stage-sub"></div>
+          </div>
+          <div class="dash-panel hr-panel">
+            <div class="panel-label">Heart Rate</div>
+            <div class="big-number" id="hr-value" style="color: var(--hr-color)">--</div>
+            <span class="big-unit">bpm</span>
+          </div>
+          <div class="dash-panel battery-panel">
+            <div class="panel-label">Body Battery</div>
+            <div class="big-number" id="battery-number" style="color: var(--battery-color)">--</div>
+            <div class="battery-bar-outer">
+              <div class="battery-bar-inner" id="battery-bar" style="width: 0%"></div>
+              <div class="battery-value" id="battery-label">--</div>
+            </div>
+          </div>
+          <div class="dash-panel stress-panel">
+            <div class="panel-label">Stress</div>
+            <div class="gauge-wrapper">
+              <svg viewBox="0 0 120 70" id="stress-gauge">
+                <path class="gauge-bg" d="M 10 65 A 50 50 0 0 1 110 65"/>
+                <path class="gauge-fill" id="gauge-fill" d="M 10 65 A 50 50 0 0 1 110 65"/>
+                <text class="gauge-value" x="60" y="60" id="gauge-text">--</text>
+              </svg>
+            </div>
+          </div>
+          <div class="dash-panel movement-panel">
+            <div class="panel-label">Movement</div>
+            <div class="movement-dots" id="movement-dots"></div>
+          </div>
+        </div>
+        <div class="timeline-panel">
+          <div class="timeline-bar" id="timeline-bar">
+            <canvas id="timeline-canvas" height="20"></canvas>
+            <div class="timeline-needle" id="timeline-needle"></div>
+          </div>
+          <div class="timeline-labels">
+            <span id="timeline-start">--</span>
+            <span id="timeline-end">--</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const SPEEDS = [1, 2, 5, 10, 30, 60];
+    const STAGE_COLORS_MAP = { 0: '#2563eb', 1: '#5b9bd5', 2: '#c45a8a', 3: '#d4a54a' };
+    const STAGE_NAMES = { 0: 'Deep', 1: 'Light', 2: 'REM', 3: 'Awake' };
+    const MOVEMENT_DOTS_COUNT = 40;
+
+    let nightsData = {};
+    let currentNight = null;
+    let playing = false;
+    let speed = 10;
+    let simTime = 0;
+    let lastFrameTime = null;
+    let animId = null;
+
+    function buildClockFace() {
+      const face = document.getElementById('clock-face');
+      for (let i = 0; i < 12; i++) {
+        const tick = document.createElement('div');
+        tick.className = 'clock-tick major';
+        tick.style.transform = `rotate(${i * 30}deg)`;
+        face.appendChild(tick);
+      }
+      for (let i = 0; i < 60; i++) {
+        if (i % 5 === 0) continue;
+        const tick = document.createElement('div');
+        tick.className = 'clock-tick';
+        tick.style.transform = `rotate(${i * 6}deg)`;
+        face.appendChild(tick);
+      }
+      const hourHand = document.createElement('div');
+      hourHand.className = 'clock-hand-hour';
+      hourHand.id = 'hand-hour';
+      face.appendChild(hourHand);
+      const minHand = document.createElement('div');
+      minHand.className = 'clock-hand-minute';
+      minHand.id = 'hand-minute';
+      face.appendChild(minHand);
+      const center = document.createElement('div');
+      center.className = 'clock-center';
+      face.appendChild(center);
+    }
+
+    function buildSpeedButtons() {
+      const container = document.getElementById('speed-btns');
+      SPEEDS.forEach(s => {
+        const btn = document.createElement('button');
+        btn.className = 'speed-btn' + (s === speed ? ' active' : '');
+        btn.textContent = s + 'x';
+        btn.addEventListener('click', () => {
+          speed = s;
+          container.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function buildMovementDots() {
+      const container = document.getElementById('movement-dots');
+      container.innerHTML = '';
+      for (let i = 0; i < MOVEMENT_DOTS_COUNT; i++) {
+        const dot = document.createElement('div');
+        dot.className = 'movement-dot';
+        container.appendChild(dot);
+      }
+    }
+
+    function nearestPoint(arr, h) {
+      if (!arr || !arr.length) return null;
+      let best = arr[0], bestDist = Math.abs(arr[0].h - h);
+      for (let i = 1; i < arr.length; i++) {
+        const dist = Math.abs(arr[i].h - h);
+        if (dist < bestDist) { best = arr[i]; bestDist = dist; }
+        if (arr[i].h > h) break;
+      }
+      return best;
+    }
+
+    function findStage(levels, h) {
+      if (!levels || !levels.length) return null;
+      for (const seg of levels) {
+        if (h >= seg.start && h < seg.end) return seg;
+      }
+      return null;
+    }
+
+    function drawTimeline(night) {
+      const canvas = document.getElementById('timeline-canvas');
+      const levels = night.levels;
+      if (!levels || !levels.length) return;
+
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const w = rect.width;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = w * dpr;
+      canvas.height = 20 * dpr;
+      canvas.style.width = w + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      const tMin = night.summary.bedtime;
+      const tMax = night.summary.waketime;
+      const range = tMax - tMin;
+
+      levels.forEach(seg => {
+        const x1 = ((Math.max(seg.start, tMin) - tMin) / range) * w;
+        const x2 = ((Math.min(seg.end, tMax) - tMin) / range) * w;
+        if (x2 <= x1) return;
+        ctx.fillStyle = STAGE_COLORS_MAP[seg.stage] || '#3a3a4a';
+        ctx.fillRect(x1, 0, x2 - x1, 20);
+      });
+    }
+
+    function updateDisplays(h) {
+      if (!currentNight) return;
+      const n = currentNight;
+      const tMin = n.summary.bedtime;
+      const tMax = n.summary.waketime;
+
+      const realH = ((h % 24) + 24) % 24;
+      const hours = Math.floor(realH);
+      const minutes = Math.floor((realH - Math.floor(realH)) * 60);
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const h12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+      const timeStr = `${h12}:${String(minutes).padStart(2, '0')} ${ampm}`;
+      document.getElementById('digital-time').textContent = timeStr;
+      document.getElementById('clock-display').textContent = timeStr;
+
+      const hourAngle = ((realH % 12) / 12) * 360;
+      const minAngle = (minutes / 60) * 360;
+      const hourHand = document.getElementById('hand-hour');
+      const minHand = document.getElementById('hand-minute');
+      if (hourHand) hourHand.style.transform = `rotate(${hourAngle}deg)`;
+      if (minHand) minHand.style.transform = `rotate(${minAngle}deg)`;
+
+      const seg = findStage(n.levels, h);
+      const stageEl = document.getElementById('stage-name');
+      const stageSub = document.getElementById('stage-sub');
+      if (seg) {
+        const name = STAGE_NAMES[seg.stage] || 'Unknown';
+        stageEl.textContent = name;
+        stageEl.style.color = STAGE_COLORS_MAP[seg.stage] || 'var(--text)';
+        const durMin = Math.round((seg.end - seg.start) * 60);
+        stageSub.textContent = `${durMin} min segment`;
+      } else {
+        stageEl.textContent = '--';
+        stageEl.style.color = 'var(--text-dim)';
+        stageSub.textContent = '';
+      }
+
+      const hrPt = nearestPoint(n.hr, h);
+      document.getElementById('hr-value').textContent = hrPt ? hrPt.v : '--';
+
+      const batPt = nearestPoint(n.battery, h);
+      const batVal = batPt ? batPt.v : 0;
+      document.getElementById('battery-number').textContent = batPt ? batVal : '--';
+      document.getElementById('battery-bar').style.width = batVal + '%';
+      document.getElementById('battery-label').textContent = batPt ? batVal + '%' : '--';
+
+      const stressPt = nearestPoint(n.stress, h);
+      const stressVal = stressPt ? stressPt.v : 0;
+      const gaugeText = document.getElementById('gauge-text');
+      const gaugeFill = document.getElementById('gauge-fill');
+      gaugeText.textContent = stressPt ? stressVal : '--';
+
+      const arcLen = Math.PI * 50;
+      const pct = Math.min(stressVal / 100, 1);
+      gaugeFill.style.strokeDasharray = arcLen;
+      gaugeFill.style.strokeDashoffset = arcLen * (1 - pct);
+      const stressColor = stressVal < 25 ? '#22c55e' : stressVal < 50 ? '#f59e0b' : '#ef4444';
+      gaugeFill.style.stroke = stressColor;
+
+      const movPt = nearestPoint(n.movement, h);
+      const movVal = movPt ? movPt.v : 0;
+      const maxMov = 7;
+      const dots = document.querySelectorAll('.movement-dot');
+      const norm = Math.min(movVal / maxMov, 1);
+      dots.forEach((dot, i) => {
+        const threshold = i / dots.length;
+        const active = norm > threshold;
+        dot.style.opacity = active ? 0.3 + norm * 0.7 : 0.08;
+        dot.style.height = active ? (8 + norm * 16) + 'px' : '8px';
+        dot.style.background = active ? (norm > 0.5 ? 'var(--awake-bright)' : 'var(--accent)') : 'var(--border)';
+      });
+
+      const progress = (h - tMin) / (tMax - tMin);
+      document.getElementById('timeline-needle').style.left = `calc(${Math.max(0, Math.min(100, progress * 100))}% - 1px)`;
+    }
+
+    function loadNight(date) {
+      const n = nightsData[date];
+      if (!n || !n.levels || !n.levels.length) {
+        document.getElementById('dashboard').innerHTML = '<div class="no-data-msg" style="grid-column:1/-1">No detailed data for this night</div>';
+        currentNight = null;
+        return;
+      }
+      currentNight = n;
+      simTime = n.summary.bedtime;
+
+      document.getElementById('timeline-start').textContent = formatHour(n.summary.bedtime % 24);
+      document.getElementById('timeline-end').textContent = formatHour(n.summary.waketime % 24);
+      drawTimeline(n);
+      updateDisplays(simTime);
+    }
+
+    function togglePlay() {
+      playing = !playing;
+      const icon = document.getElementById('play-icon');
+      if (playing) {
+        icon.innerHTML = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+        lastFrameTime = performance.now();
+        animId = requestAnimationFrame(tick);
+      } else {
+        icon.innerHTML = '<polygon points="6,3 20,12 6,21"/>';
+        if (animId) cancelAnimationFrame(animId);
+        animId = null;
+      }
+    }
+
+    function tick(now) {
+      if (!playing || !currentNight) return;
+      const dt = now - lastFrameTime;
+      lastFrameTime = now;
+
+      const advanceHours = (speed * dt) / (1000 * 3600);
+      simTime += advanceHours;
+
+      if (simTime >= currentNight.summary.waketime) {
+        simTime = currentNight.summary.waketime;
+        playing = false;
+        const icon = document.getElementById('play-icon');
+        icon.innerHTML = '<polygon points="6,3 20,12 6,21"/>';
+        updateDisplays(simTime);
+        return;
+      }
+
+      updateDisplays(simTime);
+      animId = requestAnimationFrame(tick);
+    }
+
+    buildClockFace();
+    buildSpeedButtons();
+    buildMovementDots();
+
+    document.getElementById('play-btn').addEventListener('click', () => {
+      if (!currentNight) return;
+      if (simTime >= currentNight.summary.waketime) {
+        simTime = currentNight.summary.bedtime;
+      }
+      togglePlay();
+    });
+
+    loadData('nights_all.json').then(data => {
+      nightsData = data;
+      const dates = Object.keys(data).sort();
+      const validDates = dates.filter(d => {
+        const n = data[d];
+        return n.levels && n.levels.length > 0 && n.hr && n.hr.length > 0;
+      });
+
+      const select = document.getElementById('night-select');
+      validDates.slice().reverse().forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d;
+        opt.textContent = formatDateLong(d);
+        select.appendChild(opt);
+      });
+
+      if (validDates.length) {
+        loadNight(validDates[validDates.length - 1]);
+      }
+
+      select.addEventListener('change', () => {
+        if (playing) togglePlay();
+        loadNight(select.value);
+      });
+
+      let resizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          if (currentNight) drawTimeline(currentNight);
+        }, 150);
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Efficiency Waffle — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .waffle-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 1.5rem;
+    }
+
+    .waffle-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .waffle-label {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-align: center;
+      line-height: 1.3;
+    }
+
+    .waffle-label .date {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      color: var(--text-dim);
+    }
+
+    .waffle-label .eff {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      font-weight: 400;
+    }
+
+    @media (max-width: 1000px) {
+      .waffle-grid { grid-template-columns: repeat(5, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+      .waffle-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Efficiency <em>Waffle</em>',
+      'Each 10×10 grid represents one night — filled squares show time asleep, colored by sleep stage composition. Empty squares are time awake in bed.',
+      'Comparative'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="stats-row" id="stats-row"></div>
+      <div class="viz-container">
+        <div class="waffle-grid" id="waffle-grid"><div class="loading">Loading sleep data</div></div>
+        <div class="legend" id="legend"></div>
+      </div>
+    `;
+
+    loadData('summary.json').then(summary => {
+      summary.sort((a, b) => new Date(a.date) - new Date(b.date));
+      const recent = summary.slice(-30);
+
+      const avgEff = d3.mean(recent, d => d.efficiency);
+      const minEff = d3.min(recent, d => d.efficiency);
+      const maxEff = d3.max(recent, d => d.efficiency);
+      const avgSleep = d3.mean(recent, d => d.totalSleep);
+
+      document.getElementById('stats-row').innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${avgEff.toFixed(1)}%</div>
+          <div class="stat-label">Avg Efficiency</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${minEff.toFixed(1)}%</div>
+          <div class="stat-label">Min</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${maxEff.toFixed(1)}%</div>
+          <div class="stat-label">Max</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatDuration(avgSleep)}</div>
+          <div class="stat-label">Avg Sleep</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${recent.length}</div>
+          <div class="stat-label">Nights</div>
+        </div>
+      `;
+
+      const grid = document.getElementById('waffle-grid');
+      grid.innerHTML = '';
+
+      const CELL = 8;
+      const GAP = 1.5;
+      const COLS = 10;
+      const ROWS = 10;
+      const SIZE = COLS * (CELL + GAP) - GAP;
+
+      const tooltip = createTooltip(document.querySelector('.viz-container'));
+
+      recent.forEach(d => {
+        const card = document.createElement('div');
+        card.className = 'waffle-card';
+
+        const effColor = d.efficiency >= 90 ? 'var(--success)' :
+                         d.efficiency >= 80 ? 'var(--warning)' : 'var(--danger)';
+
+        const totalStages = d.deep + d.light + d.rem;
+        const deepPct = totalStages > 0 ? d.deep / totalStages : 0.33;
+        const lightPct = totalStages > 0 ? d.light / totalStages : 0.34;
+
+        const filledCount = Math.round(d.efficiency);
+        const deepCells = Math.round(filledCount * deepPct);
+        const lightCells = Math.round(filledCount * lightPct);
+        const remCells = filledCount - deepCells - lightCells;
+
+        const stages = [];
+        for (let i = 0; i < deepCells; i++) stages.push(0);
+        for (let i = 0; i < lightCells; i++) stages.push(1);
+        for (let i = 0; i < Math.max(0, remCells); i++) stages.push(2);
+
+        const svg = d3.select(card).append('svg')
+          .attr('width', SIZE + 4)
+          .attr('height', SIZE + 4)
+          .attr('viewBox', `0 0 ${SIZE + 4} ${SIZE + 4}`)
+          .style('cursor', 'pointer');
+
+        for (let row = 0; row < ROWS; row++) {
+          for (let col = 0; col < COLS; col++) {
+            const idx = (ROWS - 1 - row) * COLS + col;
+            const isFilled = idx < filledCount;
+            const cx = 2 + col * (CELL + GAP);
+            const cy = 2 + row * (CELL + GAP);
+
+            if (isFilled) {
+              const stageIdx = stages[idx] != null ? stages[idx] : 1;
+              svg.append('rect')
+                .attr('x', cx).attr('y', cy)
+                .attr('width', CELL).attr('height', CELL)
+                .attr('rx', 1.5)
+                .attr('fill', stageColor(stageIdx))
+                .attr('opacity', 0.85);
+            } else {
+              svg.append('rect')
+                .attr('x', cx).attr('y', cy)
+                .attr('width', CELL).attr('height', CELL)
+                .attr('rx', 1.5)
+                .attr('fill', 'none')
+                .attr('stroke', 'var(--border)')
+                .attr('stroke-width', 0.5);
+            }
+          }
+        }
+
+        const label = document.createElement('div');
+        label.className = 'waffle-label';
+        label.innerHTML = `
+          <span class="eff" style="color:${effColor}">${d.efficiency.toFixed(0)}%</span>
+          <span class="date">${formatDate(d.date)}</span>
+        `;
+
+        card.appendChild(label);
+
+        card.addEventListener('mouseenter', e => {
+          const rect = card.getBoundingClientRect();
+          const containerRect = document.querySelector('.viz-container').getBoundingClientRect();
+          tooltip.show(
+            `<div class="tooltip-label">${formatDateLong(d.date)}</div>
+             <div class="tooltip-value">Efficiency: ${d.efficiency.toFixed(1)}%</div>
+             <div style="font-size:0.65rem;color:var(--text-muted)">
+               Sleep ${formatDuration(d.totalSleep)} · In bed ${formatDuration(d.inBed)}
+             </div>
+             <div style="font-size:0.65rem;color:var(--deep-bright)">Deep ${formatDuration(d.deep)} (${(deepPct * 100).toFixed(0)}%)</div>
+             <div style="font-size:0.65rem;color:var(--light-bright)">Light ${formatDuration(d.light)} (${(lightPct * 100).toFixed(0)}%)</div>
+             <div style="font-size:0.65rem;color:var(--rem-bright)">REM ${formatDuration(d.rem)} (${(totalStages > 0 ? d.rem / totalStages * 100 : 0).toFixed(0)}%)</div>`,
+            rect.left - containerRect.left + rect.width / 2,
+            rect.top - containerRect.top
+          );
+        });
+
+        card.addEventListener('mouseleave', () => tooltip.hide());
+
+        grid.appendChild(card);
+      });
+
+      document.getElementById('legend').innerHTML = `
+        <div class="legend-item"><span class="legend-dot" style="background:var(--deep)"></span>Deep</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--light)"></span>Light</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--rem)"></span>REM</div>
+        <div class="legend-item"><span class="legend-dot" style="background:transparent;border:1px solid var(--border)"></span>Awake in bed</div>
+      `;
+    });
+  </script>
+</body>
+</html>

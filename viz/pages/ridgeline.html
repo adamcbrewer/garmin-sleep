@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ridgeline Plot — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    body::before { display: none; }
+
+    .viz-container {
+      background: #0a0a0f;
+      border-color: #1a1a26;
+      padding: 0;
+      overflow: visible;
+    }
+
+    .viz-container::before { display: none; }
+
+    .ridgeline-svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <script>
+    document.body.innerHTML = `
+      <div class="page">
+        <nav class="nav">
+          <a href="../index.html" class="nav-back">
+            <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+            All Visualizations
+          </a>
+          <span class="nav-category">Data Art</span>
+        </nav>
+        <h1>Ridgeline <em>Plot</em></h1>
+        <p class="subtitle">Joy Division-style stacked heart rate curves — each ridge is one night's HR trace, oldest at the bottom, newest at the top.</p>
+        <div id="viz-root">
+          <div class="viz-container">
+            <div class="loading">Loading heart rate data</div>
+          </div>
+        </div>
+      </div>
+    `;
+  </script>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    (async () => {
+      const [hrData, summary] = await Promise.all([
+        loadData('heartrate.json'),
+        loadData('summary.json'),
+      ]);
+
+      const dates = summary
+        .filter(d => d.totalSleep > 0 && hrData[d.date])
+        .map(d => d.date)
+        .sort();
+
+      const step = dates.length > 120 ? 2 : 1;
+      const selectedDates = dates.filter((_, i) => i % step === 0);
+
+      const nights = selectedDates.map(date => {
+        const pts = hrData[date].filter(p => p.v != null);
+        return { date, pts };
+      }).filter(d => d.pts.length > 20);
+
+      const allH = nights.flatMap(n => n.pts.map(p => p.h));
+      const hMin = d3.min(allH);
+      const hMax = d3.max(allH);
+
+      const margin = { top: 40, right: 40, bottom: 50, left: 60 };
+      const width = 900;
+      const rowHeight = 8;
+      const overlap = 5;
+      const effectiveRow = rowHeight - overlap;
+      const curveAmplitude = 40;
+      const chartHeight = nights.length * effectiveRow + curveAmplitude + margin.top + margin.bottom;
+
+      const container = document.querySelector('.viz-container');
+      container.innerHTML = '';
+
+      const svg = d3.select(container)
+        .append('svg')
+        .attr('class', 'ridgeline-svg')
+        .attr('viewBox', `0 0 ${width} ${chartHeight}`)
+        .attr('preserveAspectRatio', 'xMidYMid meet');
+
+      const defs = svg.append('defs');
+
+      const innerWidth = width - margin.left - margin.right;
+
+      const xScale = d3.scaleLinear()
+        .domain([hMin, hMax])
+        .range([0, innerWidth]);
+
+      const g = svg.append('g')
+        .attr('transform', `translate(${margin.left},${margin.top})`);
+
+      const grad = defs.append('linearGradient')
+        .attr('id', 'ridge-fill')
+        .attr('x1', '0').attr('y1', '1')
+        .attr('x2', '0').attr('y2', '0');
+      grad.append('stop').attr('offset', '0%').attr('stop-color', '#0a0a0f');
+      grad.append('stop').attr('offset', '100%').attr('stop-color', '#1a1a2e');
+
+      nights.forEach((night, i) => {
+        const baseline = (nights.length - 1 - i) * effectiveRow;
+
+        const vs = night.pts.map(p => p.v);
+        const vMin = d3.min(vs);
+        const vMax = d3.max(vs);
+        const vRange = vMax - vMin || 1;
+
+        const yScale = d3.scaleLinear()
+          .domain([vMin, vMax])
+          .range([0, curveAmplitude]);
+
+        const clipId = `clip-${i}`;
+        defs.append('clipPath')
+          .attr('id', clipId)
+          .append('rect')
+          .attr('x', -2)
+          .attr('y', baseline - curveAmplitude - 5)
+          .attr('width', innerWidth + 4)
+          .attr('height', curveAmplitude + 5);
+
+        const nightG = g.append('g')
+          .attr('clip-path', `url(#${clipId})`);
+
+        const area = d3.area()
+          .x(d => xScale(d.h))
+          .y0(baseline)
+          .y1(d => baseline - yScale(d.v))
+          .curve(d3.curveBasis);
+
+        const line = d3.line()
+          .x(d => xScale(d.h))
+          .y(d => baseline - yScale(d.v))
+          .curve(d3.curveBasis);
+
+        nightG.append('path')
+          .datum(night.pts)
+          .attr('d', area)
+          .attr('fill', 'url(#ridge-fill)');
+
+        nightG.append('path')
+          .datum(night.pts)
+          .attr('d', line)
+          .attr('fill', 'none')
+          .attr('stroke', 'rgba(220, 220, 240, 0.7)')
+          .attr('stroke-width', 0.8);
+      });
+
+      const xAxis = d3.axisBottom(xScale)
+        .tickValues(d3.range(Math.ceil(hMin), Math.floor(hMax) + 1, 1))
+        .tickFormat(d => formatHour(d));
+
+      const axisY = (nights.length - 1) * effectiveRow + 15;
+      g.append('g')
+        .attr('class', 'axis')
+        .attr('transform', `translate(0, ${axisY})`)
+        .call(xAxis)
+        .call(g => g.select('.domain').attr('stroke', '#2a2a3a'))
+        .call(g => g.selectAll('.tick line').attr('stroke', '#2a2a3a'))
+        .call(g => g.selectAll('.tick text')
+          .attr('fill', '#5a5870')
+          .attr('font-size', '10px')
+          .attr('font-family', 'DM Sans, system-ui, sans-serif'));
+
+      const dateLabels = [0, Math.floor(nights.length / 2), nights.length - 1];
+      dateLabels.forEach(idx => {
+        const baseline = (nights.length - 1 - idx) * effectiveRow;
+        g.append('text')
+          .attr('x', -10)
+          .attr('y', baseline + 3)
+          .attr('text-anchor', 'end')
+          .attr('fill', '#5a5870')
+          .attr('font-size', '8px')
+          .attr('font-family', 'DM Sans, system-ui, sans-serif')
+          .text(formatDate(nights[idx].date));
+      });
+
+    })();
+  </script>
+</body>
+</html>

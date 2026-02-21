@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Body Battery Curve — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .controls { align-items: center; }
+
+    .change-badge {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      font-weight: 400;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    .change-badge.positive {
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.1);
+    }
+
+    .change-badge.negative {
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .change-badge.neutral {
+      color: #f59e0b;
+      background: rgba(245, 158, 11, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Body Battery <em>Curve</em>',
+      'Charging visualization with rate-of-recovery color encoding — steep green slopes mean excellent recovery, flat or red means poor.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="controls" id="controls">
+        <select class="control-select" id="night-select"></select>
+      </div>
+      <div class="stats-row" id="stats-row"></div>
+      <div class="viz-container">
+        <div class="viz-canvas" id="chart-canvas">
+          <div class="loading">Loading body battery data</div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </div>
+    `;
+
+    Promise.all([
+      loadData('battery.json'),
+      loadData('stress.json'),
+      loadData('summary.json'),
+    ]).then(([batteryData, stressData, summary]) => {
+      const summaryByDate = Object.fromEntries(summary.map(d => [d.date, d]));
+      const dates = Object.keys(batteryData).sort();
+      const validDates = dates.filter(d => batteryData[d].length > 10);
+
+      const select = document.getElementById('night-select');
+      validDates.slice().reverse().forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d;
+        opt.textContent = formatDateLong(d);
+        select.appendChild(opt);
+      });
+
+      const WIDTH = 900;
+      const HEIGHT = 440;
+      const margin = { top: 30, right: 50, bottom: 40, left: 55 };
+
+      function render(selectedDate) {
+        const canvas = document.getElementById('chart-canvas');
+        canvas.innerHTML = '';
+
+        const bPts = batteryData[selectedDate].filter(p => p.v != null);
+        const sPts = (stressData[selectedDate] || []).filter(p => p.v != null);
+        if (!bPts.length) return;
+
+        const { svg, g, innerWidth, innerHeight } = createSVG('#chart-canvas', WIDTH, HEIGHT, margin);
+        const defs = svg.append('defs');
+
+        const xDomain = d3.extent(bPts, d => d.h);
+        const xScale = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
+        const yScale = d3.scaleLinear().domain([0, 100]).range([innerHeight, 0]);
+
+        const xAxis = d3.axisBottom(xScale)
+          .tickValues(d3.range(Math.ceil(xDomain[0]), Math.floor(xDomain[1]) + 1, 1))
+          .tickFormat(d => formatHour(d % 24));
+        g.append('g')
+          .attr('class', 'axis')
+          .attr('transform', `translate(0,${innerHeight})`)
+          .call(xAxis);
+
+        const yAxis = d3.axisLeft(yScale).ticks(5).tickFormat(d => d);
+        g.append('g')
+          .attr('class', 'axis')
+          .call(yAxis)
+          .call(g => g.selectAll('.tick line').clone()
+            .attr('class', 'grid')
+            .attr('x2', innerWidth)
+            .attr('stroke-opacity', 0.15));
+
+        g.append('text')
+          .attr('x', -10).attr('y', -10)
+          .attr('text-anchor', 'end')
+          .attr('fill', 'var(--text-dim)')
+          .attr('font-size', '10px')
+          .attr('font-family', 'var(--font-mono)')
+          .text('Battery %');
+
+        const segments = [];
+        for (let i = 0; i < bPts.length - 1; i++) {
+          const charging = bPts[i + 1].v >= bPts[i].v;
+          segments.push({
+            pts: [bPts[i], bPts[i + 1]],
+            charging,
+          });
+        }
+
+        const mergedSegments = [];
+        segments.forEach(seg => {
+          const last = mergedSegments[mergedSegments.length - 1];
+          if (last && last.charging === seg.charging) {
+            last.pts.push(seg.pts[1]);
+          } else {
+            mergedSegments.push({ pts: [seg.pts[0], seg.pts[1]], charging: seg.charging });
+          }
+        });
+
+        mergedSegments.forEach((seg, idx) => {
+          const gradId = `bb-seg-${idx}`;
+          const grad = defs.append('linearGradient')
+            .attr('id', gradId)
+            .attr('x1', '0').attr('y1', '1')
+            .attr('x2', '0').attr('y2', '0');
+
+          if (seg.charging) {
+            grad.append('stop').attr('offset', '0%').attr('stop-color', '#064e3b').attr('stop-opacity', 0.7);
+            grad.append('stop').attr('offset', '100%').attr('stop-color', '#22c55e').attr('stop-opacity', 0.6);
+          } else {
+            grad.append('stop').attr('offset', '0%').attr('stop-color', '#7f1d1d').attr('stop-opacity', 0.4);
+            grad.append('stop').attr('offset', '100%').attr('stop-color', '#f59e0b').attr('stop-opacity', 0.5);
+          }
+
+          const area = d3.area()
+            .x(d => xScale(d.h))
+            .y0(innerHeight)
+            .y1(d => yScale(d.v))
+            .curve(d3.curveMonotoneX);
+
+          g.append('path')
+            .datum(seg.pts)
+            .attr('fill', `url(#${gradId})`)
+            .attr('d', area);
+        });
+
+        const batteryLine = d3.line()
+          .x(d => xScale(d.h))
+          .y(d => yScale(d.v))
+          .curve(d3.curveMonotoneX);
+
+        g.append('path')
+          .datum(bPts)
+          .attr('fill', 'none')
+          .attr('stroke', '#22c55e')
+          .attr('stroke-width', 2)
+          .attr('d', batteryLine);
+
+        if (sPts.length > 5) {
+          const stressYScale = d3.scaleLinear().domain([0, 100]).range([innerHeight, 0]);
+
+          const stressArea = d3.area()
+            .x(d => xScale(d.h))
+            .y0(innerHeight)
+            .y1(d => stressYScale(d.v))
+            .curve(d3.curveMonotoneX);
+
+          g.append('path')
+            .datum(sPts)
+            .attr('fill', '#f59e0b')
+            .attr('fill-opacity', 0.08)
+            .attr('d', stressArea);
+
+          const stressLine = d3.line()
+            .x(d => xScale(d.h))
+            .y(d => stressYScale(d.v))
+            .curve(d3.curveMonotoneX);
+
+          g.append('path')
+            .datum(sPts)
+            .attr('fill', 'none')
+            .attr('stroke', '#f59e0b')
+            .attr('stroke-width', 1)
+            .attr('stroke-opacity', 0.5)
+            .attr('stroke-dasharray', '3,2')
+            .attr('d', stressLine);
+
+          g.append('text')
+            .attr('x', innerWidth + 6)
+            .attr('y', stressYScale(sPts[sPts.length - 1].v))
+            .attr('fill', '#f59e0b')
+            .attr('font-size', '9px')
+            .attr('font-family', 'var(--font-mono)')
+            .attr('dominant-baseline', 'central')
+            .text('stress');
+        }
+
+        const startDot = bPts[0];
+        const endDot = bPts[bPts.length - 1];
+
+        [startDot, endDot].forEach((d, i) => {
+          g.append('circle')
+            .attr('cx', xScale(d.h)).attr('cy', yScale(d.v))
+            .attr('r', 4)
+            .attr('fill', i === 0 ? '#6366f1' : '#22c55e')
+            .attr('stroke', '#0a0a0f')
+            .attr('stroke-width', 2);
+
+          g.append('text')
+            .attr('x', xScale(d.h) + (i === 0 ? -8 : 8))
+            .attr('y', yScale(d.v) - 10)
+            .attr('text-anchor', i === 0 ? 'end' : 'start')
+            .attr('fill', i === 0 ? '#6366f1' : '#22c55e')
+            .attr('font-size', '11px')
+            .attr('font-family', 'var(--font-mono)')
+            .attr('font-weight', '400')
+            .text(d.v);
+        });
+
+        const tooltip = createTooltip(document.querySelector('.viz-container'));
+        const bisect = d3.bisector(d => d.h).left;
+
+        const overlay = g.append('rect')
+          .attr('width', innerWidth).attr('height', innerHeight)
+          .attr('fill', 'none')
+          .attr('pointer-events', 'all');
+
+        const hoverLine = g.append('line')
+          .attr('y1', 0).attr('y2', innerHeight)
+          .attr('stroke', 'var(--text-dim)')
+          .attr('stroke-width', 0.5)
+          .attr('stroke-dasharray', '3,3')
+          .style('display', 'none');
+
+        const hoverDotB = g.append('circle')
+          .attr('r', 3.5).attr('fill', '#22c55e').attr('stroke', '#0a0a0f').attr('stroke-width', 1.5)
+          .style('display', 'none');
+
+        const hoverDotS = g.append('circle')
+          .attr('r', 3).attr('fill', '#f59e0b').attr('stroke', '#0a0a0f').attr('stroke-width', 1.5)
+          .style('display', 'none');
+
+        overlay.on('mousemove', function(event) {
+          const [mx] = d3.pointer(event);
+          const h = xScale.invert(mx);
+
+          const bi = bisect(bPts, h, 1);
+          const b0 = bPts[bi - 1], b1 = bPts[bi];
+          if (!b0 || !b1) return;
+          const bd = h - b0.h > b1.h - h ? b1 : b0;
+
+          hoverLine.style('display', null).attr('x1', xScale(bd.h)).attr('x2', xScale(bd.h));
+          hoverDotB.style('display', null).attr('cx', xScale(bd.h)).attr('cy', yScale(bd.v));
+
+          let stressHtml = '';
+          if (sPts.length > 5) {
+            const si = bisect(sPts, h, 1);
+            const s0 = sPts[si - 1], s1 = sPts[si];
+            if (s0 && s1) {
+              const sd = h - s0.h > s1.h - h ? s1 : s0;
+              hoverDotS.style('display', null).attr('cx', xScale(sd.h)).attr('cy', yScale(sd.v));
+              stressHtml = `<div class="tooltip-value" style="color:#f59e0b">Stress: ${sd.v}</div>`;
+            }
+          }
+
+          const containerRect = document.querySelector('.viz-container').getBoundingClientRect();
+          const svgRect = svg.node().getBoundingClientRect();
+          const sx = svgRect.width / WIDTH;
+          const px = svgRect.left - containerRect.left + (margin.left + xScale(bd.h)) * sx;
+          const py = svgRect.top - containerRect.top + (margin.top + yScale(bd.v)) * sx;
+
+          tooltip.show(
+            `<div class="tooltip-label">${formatHour(bd.h % 24)}</div>
+             <div class="tooltip-value" style="color:#22c55e">Battery: ${bd.v}%</div>
+             ${stressHtml}`,
+            px, py
+          );
+        });
+
+        overlay.on('mouseleave', () => {
+          hoverLine.style('display', 'none');
+          hoverDotB.style('display', 'none');
+          hoverDotS.style('display', 'none');
+          tooltip.hide();
+        });
+
+        const startVal = bPts[0].v;
+        const endVal = bPts[bPts.length - 1].v;
+        const change = endVal - startVal;
+        const changeClass = change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral';
+        const changeStr = (change > 0 ? '+' : '') + change;
+
+        let peakRate = 0;
+        for (let i = 1; i < bPts.length; i++) {
+          const dt = bPts[i].h - bPts[i - 1].h;
+          if (dt > 0) {
+            const rate = (bPts[i].v - bPts[i - 1].v) / dt;
+            if (rate > peakRate) peakRate = rate;
+          }
+        }
+
+        const avgStress = sPts.length > 0 ? Math.round(d3.mean(sPts, d => d.v)) : null;
+
+        document.getElementById('stats-row').innerHTML = `
+          <div class="stat">
+            <div class="stat-value">${startVal}%</div>
+            <div class="stat-label">Start Battery</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${endVal}%</div>
+            <div class="stat-label">End Battery</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value"><span class="change-badge ${changeClass}">${changeStr}</span></div>
+            <div class="stat-label">Net Change</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${peakRate.toFixed(1)} <span style="font-size:0.6em;color:var(--text-dim)">/hr</span></div>
+            <div class="stat-label">Peak Charge Rate</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${avgStress !== null ? avgStress : '—'}</div>
+            <div class="stat-label">Avg Stress</div>
+          </div>
+        `;
+      }
+
+      document.getElementById('legend').innerHTML = `
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#22c55e"></span>
+          Body Battery
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#f59e0b"></span>
+          Stress
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#064e3b"></span>
+          Charging
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:#7f1d1d"></span>
+          Draining
+        </div>
+      `;
+
+      render(validDates[validDates.length - 1]);
+      select.addEventListener('change', () => render(select.value));
+    });
+  </script>
+</body>
+</html>

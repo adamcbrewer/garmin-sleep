@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heart Rate Valley — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .controls { align-items: center; }
+
+    .nadir-label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 400;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Heart Rate <em>Valley</em>',
+      'Nightly heart rate as a filled area chart showing the cardiac recovery arc — the deeper the valley, the better your recovery.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="controls" id="controls">
+        <select class="control-select" id="night-select"></select>
+        <button class="control-btn" id="overlay-btn">Overlay All Nights</button>
+      </div>
+      <div class="stats-row" id="stats-row"></div>
+      <div class="viz-container">
+        <div class="viz-canvas" id="chart-canvas">
+          <div class="loading">Loading heart rate data</div>
+        </div>
+      </div>
+    `;
+
+    Promise.all([loadData('heartrate.json'), loadData('summary.json')]).then(([hrData, summary]) => {
+      const summaryByDate = Object.fromEntries(summary.map(d => [d.date, d]));
+      const dates = Object.keys(hrData).sort();
+      const validDates = dates.filter(d => hrData[d].length > 20);
+
+      const select = document.getElementById('night-select');
+      validDates.slice().reverse().forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d;
+        opt.textContent = formatDateLong(d);
+        select.appendChild(opt);
+      });
+
+      let overlayActive = false;
+      const overlayBtn = document.getElementById('overlay-btn');
+
+      const WIDTH = 900;
+      const HEIGHT = 440;
+      const margin = { top: 30, right: 30, bottom: 40, left: 55 };
+
+      function render(selectedDate) {
+        const canvas = document.getElementById('chart-canvas');
+        canvas.innerHTML = '';
+
+        const pts = hrData[selectedDate].filter(p => p.v != null);
+        if (!pts.length) return;
+
+        const { svg, g, innerWidth, innerHeight } = createSVG('#chart-canvas', WIDTH, HEIGHT, margin);
+        const defs = svg.append('defs');
+
+        const xScale = d3.scaleLinear()
+          .domain(d3.extent(pts, d => d.h))
+          .range([0, innerWidth]);
+
+        const allVals = pts.map(d => d.v);
+        const hrMin = d3.min(allVals);
+        const hrMax = d3.max(allVals);
+        const yPad = (hrMax - hrMin) * 0.1 || 5;
+        const yScale = d3.scaleLinear()
+          .domain([hrMin - yPad, hrMax + yPad])
+          .range([innerHeight, 0]);
+
+        const gradId = 'hr-valley-grad';
+        const grad = defs.append('linearGradient')
+          .attr('id', gradId)
+          .attr('x1', '0').attr('y1', '1')
+          .attr('x2', '0').attr('y2', '0');
+        grad.append('stop').attr('offset', '0%').attr('stop-color', '#2563eb').attr('stop-opacity', 0.8);
+        grad.append('stop').attr('offset', '50%').attr('stop-color', '#8b5cf6').attr('stop-opacity', 0.5);
+        grad.append('stop').attr('offset', '100%').attr('stop-color', '#ef4444').attr('stop-opacity', 0.7);
+
+        const xAxis = d3.axisBottom(xScale)
+          .tickValues(d3.range(Math.ceil(d3.min(pts, d => d.h)), Math.floor(d3.max(pts, d => d.h)) + 1, 1))
+          .tickFormat(d => formatHour(d % 24));
+        g.append('g')
+          .attr('class', 'axis')
+          .attr('transform', `translate(0,${innerHeight})`)
+          .call(xAxis);
+
+        const yAxis = d3.axisLeft(yScale).ticks(6).tickFormat(d => d + ' bpm');
+        g.append('g')
+          .attr('class', 'axis')
+          .call(yAxis)
+          .call(g => g.selectAll('.tick line').clone()
+            .attr('class', 'grid')
+            .attr('x2', innerWidth)
+            .attr('stroke-opacity', 0.15));
+
+        if (overlayActive) {
+          const area = d3.area()
+            .x(d => xScale(d.h))
+            .y0(innerHeight)
+            .y1(d => yScale(d.v))
+            .curve(d3.curveMonotoneX);
+
+          validDates.forEach(date => {
+            if (date === selectedDate) return;
+            const nightPts = hrData[date].filter(p => p.v != null);
+            if (nightPts.length < 20) return;
+
+            const nightXScale = d3.scaleLinear()
+              .domain(d3.extent(nightPts, d => d.h))
+              .range([0, innerWidth]);
+
+            const line = d3.line()
+              .x(d => nightXScale(d.h))
+              .y(d => yScale(d.v))
+              .curve(d3.curveMonotoneX);
+
+            g.append('path')
+              .datum(nightPts)
+              .attr('fill', 'none')
+              .attr('stroke', '#8b5cf6')
+              .attr('stroke-width', 0.6)
+              .attr('stroke-opacity', 0.06)
+              .attr('d', line);
+          });
+        }
+
+        const area = d3.area()
+          .x(d => xScale(d.h))
+          .y0(innerHeight)
+          .y1(d => yScale(d.v))
+          .curve(d3.curveMonotoneX);
+
+        g.append('path')
+          .datum(pts)
+          .attr('fill', `url(#${gradId})`)
+          .attr('d', area);
+
+        const line = d3.line()
+          .x(d => xScale(d.h))
+          .y(d => yScale(d.v))
+          .curve(d3.curveMonotoneX);
+
+        g.append('path')
+          .datum(pts)
+          .attr('fill', 'none')
+          .attr('stroke', '#e8e6f0')
+          .attr('stroke-width', 1.5)
+          .attr('stroke-opacity', 0.8)
+          .attr('d', line);
+
+        const summ = summaryByDate[selectedDate];
+        const restingHR = summ ? summ.restingHR : null;
+        if (restingHR && restingHR >= yScale.domain()[0] && restingHR <= yScale.domain()[1]) {
+          g.append('line')
+            .attr('x1', 0).attr('x2', innerWidth)
+            .attr('y1', yScale(restingHR)).attr('y2', yScale(restingHR))
+            .attr('stroke', '#f59e0b')
+            .attr('stroke-width', 1)
+            .attr('stroke-dasharray', '6,4')
+            .attr('stroke-opacity', 0.7);
+
+          g.append('text')
+            .attr('x', innerWidth - 4)
+            .attr('y', yScale(restingHR) - 6)
+            .attr('text-anchor', 'end')
+            .attr('fill', '#f59e0b')
+            .attr('font-size', '10px')
+            .attr('font-family', 'var(--font-mono)')
+            .text(`Resting HR: ${restingHR}`);
+        }
+
+        const nadir = pts.reduce((min, p) => p.v < min.v ? p : min, pts[0]);
+        const nadirX = xScale(nadir.h);
+        const nadirY = yScale(nadir.v);
+
+        g.append('circle')
+          .attr('cx', nadirX).attr('cy', nadirY)
+          .attr('r', 5)
+          .attr('fill', '#22c55e')
+          .attr('stroke', '#0a0a0f')
+          .attr('stroke-width', 2);
+
+        g.append('line')
+          .attr('x1', nadirX).attr('x2', nadirX)
+          .attr('y1', nadirY - 10).attr('y2', nadirY - 30)
+          .attr('stroke', '#22c55e')
+          .attr('stroke-width', 1)
+          .attr('stroke-opacity', 0.6);
+
+        g.append('rect')
+          .attr('x', nadirX - 42).attr('y', nadirY - 50)
+          .attr('width', 84).attr('height', 20)
+          .attr('rx', 4)
+          .attr('fill', 'rgba(10,10,15,0.85)')
+          .attr('stroke', '#22c55e')
+          .attr('stroke-width', 0.5)
+          .attr('stroke-opacity', 0.5);
+
+        g.append('text')
+          .attr('class', 'nadir-label')
+          .attr('x', nadirX).attr('y', nadirY - 36)
+          .attr('text-anchor', 'middle')
+          .attr('fill', '#22c55e')
+          .text(`${nadir.v} bpm @ ${formatHour(nadir.h % 24)}`);
+
+        const tooltip = createTooltip(document.querySelector('.viz-container'));
+        const bisect = d3.bisector(d => d.h).left;
+
+        const overlay = g.append('rect')
+          .attr('width', innerWidth).attr('height', innerHeight)
+          .attr('fill', 'none')
+          .attr('pointer-events', 'all');
+
+        const hoverLine = g.append('line')
+          .attr('y1', 0).attr('y2', innerHeight)
+          .attr('stroke', 'var(--text-dim)')
+          .attr('stroke-width', 0.5)
+          .attr('stroke-dasharray', '3,3')
+          .style('display', 'none');
+
+        const hoverDot = g.append('circle')
+          .attr('r', 3.5)
+          .attr('fill', '#e8e6f0')
+          .attr('stroke', '#0a0a0f')
+          .attr('stroke-width', 1.5)
+          .style('display', 'none');
+
+        overlay.on('mousemove', function(event) {
+          const [mx] = d3.pointer(event);
+          const h = xScale.invert(mx);
+          const i = bisect(pts, h, 1);
+          const d0 = pts[i - 1], d1 = pts[i];
+          if (!d0 || !d1) return;
+          const d = h - d0.h > d1.h - h ? d1 : d0;
+
+          hoverLine.style('display', null).attr('x1', xScale(d.h)).attr('x2', xScale(d.h));
+          hoverDot.style('display', null).attr('cx', xScale(d.h)).attr('cy', yScale(d.v));
+
+          const containerRect = document.querySelector('.viz-container').getBoundingClientRect();
+          const svgRect = svg.node().getBoundingClientRect();
+          const sx = svgRect.width / WIDTH;
+          const px = svgRect.left - containerRect.left + (margin.left + xScale(d.h)) * sx;
+          const py = svgRect.top - containerRect.top + (margin.top + yScale(d.v)) * sx;
+
+          tooltip.show(
+            `<div class="tooltip-label">${formatHour(d.h % 24)}</div>
+             <div class="tooltip-value">${d.v} bpm</div>`,
+            px, py
+          );
+        });
+
+        overlay.on('mouseleave', () => {
+          hoverLine.style('display', 'none');
+          hoverDot.style('display', 'none');
+          tooltip.hide();
+        });
+
+        const avgHR = Math.round(d3.mean(allVals));
+        const minHR = hrMin;
+        const nadirTime = formatHour(nadir.h % 24);
+
+        document.getElementById('stats-row').innerHTML = `
+          <div class="stat">
+            <div class="stat-value">${avgHR} <span style="font-size:0.7em;color:var(--text-dim)">bpm</span></div>
+            <div class="stat-label">Avg Heart Rate</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${minHR} <span style="font-size:0.7em;color:var(--text-dim)">bpm</span></div>
+            <div class="stat-label">Min Heart Rate</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${restingHR || '—'} <span style="font-size:0.7em;color:var(--text-dim)">bpm</span></div>
+            <div class="stat-label">Resting HR</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${nadirTime}</div>
+            <div class="stat-label">Time of Nadir</div>
+          </div>
+        `;
+      }
+
+      render(validDates[validDates.length - 1]);
+
+      select.addEventListener('change', () => render(select.value));
+
+      overlayBtn.addEventListener('click', () => {
+        overlayActive = !overlayActive;
+        overlayBtn.classList.toggle('active', overlayActive);
+        overlayBtn.textContent = overlayActive ? 'Hide Overlay' : 'Overlay All Nights';
+        render(select.value);
+      });
+    });
+  </script>
+</body>
+</html>

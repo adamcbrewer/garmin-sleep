@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enhanced Hypnogram — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .night-nav {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .night-nav select.control-select {
+      min-width: 180px;
+    }
+
+    .nav-arrow {
+      font-family: var(--font-body);
+      font-size: 0.8rem;
+      font-weight: 400;
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .nav-arrow:hover:not(:disabled) {
+      border-color: var(--accent-muted);
+      color: var(--text);
+    }
+
+    .nav-arrow:disabled {
+      opacity: 0.3;
+      cursor: default;
+    }
+
+    .legend {
+      gap: 1rem;
+    }
+
+    .legend-line {
+      width: 18px;
+      height: 3px;
+      border-radius: 1px;
+      flex-shrink: 0;
+    }
+
+    .legend-area {
+      width: 14px;
+      height: 10px;
+      border-radius: 2px;
+      flex-shrink: 0;
+      opacity: 0.5;
+    }
+
+    .chart-label {
+      font-size: 0.6rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Enhanced <em>Hypnogram</em>',
+      'Clinical sleep stage step chart with heart rate, stress, body battery, and respiration overlaid — a multi-channel view of each night.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="night-nav" id="night-nav"></div>
+      <div class="stats-row" id="stats-row"></div>
+      <div class="viz-container">
+        <div class="viz-canvas" id="chart-area">
+          <div class="loading">Loading sleep data</div>
+        </div>
+      </div>
+      <div id="legend-area"></div>
+    `;
+
+    const STAGE_Y = { 0: 3, 1: 2, 2: 1, 3: 0 };
+    const STAGE_LABELS = ['Awake', 'REM', 'Light', 'Deep'];
+
+    loadData('nights_all.json').then(raw => {
+      const allDates = Object.keys(raw).sort();
+      const dates = allDates.filter(d => {
+        const n = raw[d];
+        return n.levels.length > 0;
+      });
+
+      if (!dates.length) {
+        document.getElementById('chart-area').innerHTML = '<div class="loading">No nights with level data found</div>';
+        return;
+      }
+
+      let currentIdx = dates.length - 1;
+
+      const navEl = document.getElementById('night-nav');
+      const prevBtn = document.createElement('button');
+      prevBtn.className = 'nav-arrow';
+      prevBtn.textContent = '\u2190';
+      prevBtn.addEventListener('click', () => navigate(-1));
+
+      const nextBtn = document.createElement('button');
+      nextBtn.className = 'nav-arrow';
+      nextBtn.textContent = '\u2192';
+      nextBtn.addEventListener('click', () => navigate(1));
+
+      const sel = document.createElement('select');
+      sel.className = 'control-select';
+      dates.forEach((d, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = formatDateLong(d);
+        sel.appendChild(opt);
+      });
+      sel.value = currentIdx;
+      sel.addEventListener('change', () => {
+        currentIdx = +sel.value;
+        render();
+      });
+
+      navEl.appendChild(prevBtn);
+      navEl.appendChild(sel);
+      navEl.appendChild(nextBtn);
+
+      buildLegend();
+      render();
+
+      function navigate(dir) {
+        const next = currentIdx + dir;
+        if (next < 0 || next >= dates.length) return;
+        currentIdx = next;
+        sel.value = currentIdx;
+        render();
+      }
+
+      function render() {
+        prevBtn.disabled = currentIdx === 0;
+        nextBtn.disabled = currentIdx === dates.length - 1;
+
+        const date = dates[currentIdx];
+        const night = raw[date];
+        const s = night.summary;
+
+        document.getElementById('stats-row').innerHTML = `
+          <div class="stat">
+            <div class="stat-value">${formatDuration(s.totalSleep)}</div>
+            <div class="stat-label">Total sleep</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${formatDuration(s.deep)}</div>
+            <div class="stat-label">Deep</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${formatDuration(s.rem)}</div>
+            <div class="stat-label">REM</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${Math.round(s.efficiency)}%</div>
+            <div class="stat-label">Efficiency</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${s.avgHR != null ? Math.round(s.avgHR) + ' bpm' : '—'}</div>
+            <div class="stat-label">Avg HR</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${s.bodyBatteryChange != null ? (s.bodyBatteryChange >= 0 ? '+' : '') + s.bodyBatteryChange : '—'}</div>
+            <div class="stat-label">Battery \u0394</div>
+          </div>
+        `;
+
+        drawChart(night);
+      }
+
+      function drawChart(night) {
+        const chartArea = document.getElementById('chart-area');
+        chartArea.innerHTML = '';
+
+        const levels = night.levels;
+        const hr = night.hr.filter(p => p.v != null);
+        const stress = night.stress.filter(p => p.v != null);
+        const battery = night.battery.filter(p => p.v != null);
+        const respiration = night.respiration.filter(p => p.v != null);
+
+        const allH = [
+          ...levels.flatMap(l => [l.start, l.end]),
+          ...hr.map(p => p.h),
+          ...stress.map(p => p.h),
+          ...battery.map(p => p.h),
+          ...respiration.map(p => p.h),
+        ];
+
+        if (!allH.length) {
+          chartArea.innerHTML = '<div class="loading">No data for this night</div>';
+          return;
+        }
+
+        const hMin = d3.min(allH);
+        const hMax = d3.max(allH);
+
+        const width = 960;
+        const margin = { left: 56, right: 56, gap: 6 };
+        const innerW = width - margin.left - margin.right;
+
+        const hypH = 180;
+        const battH = 80;
+        const stressH = 80;
+        const respH = 60;
+        const topPad = 16;
+        const totalH = topPad + hypH + margin.gap + battH + margin.gap + stressH + margin.gap + respH + 30;
+
+        const svg = d3.select(chartArea)
+          .append('svg')
+          .attr('viewBox', `0 0 ${width} ${totalH}`)
+          .attr('width', '100%')
+          .attr('preserveAspectRatio', 'xMidYMid meet');
+
+        const x = d3.scaleLinear().domain([hMin, hMax]).range([margin.left, width - margin.right]);
+
+        const panelOffsets = {
+          hyp: topPad,
+          batt: topPad + hypH + margin.gap,
+          stress: topPad + hypH + margin.gap + battH + margin.gap,
+          resp: topPad + hypH + margin.gap + battH + margin.gap + stressH + margin.gap,
+        };
+
+        drawHypnogram(svg, x, levels, hr, panelOffsets.hyp, hypH, margin, innerW, hMin, hMax);
+        drawAreaPanel(svg, x, battery, panelOffsets.batt, battH, margin, 'Body Battery', 'var(--battery-color)', [0, 100], true);
+        drawAreaPanel(svg, x, stress, panelOffsets.stress, stressH, margin, 'Stress', 'var(--stress-color)', null, true);
+        drawLinePanel(svg, x, respiration, panelOffsets.resp, respH, margin, 'Respiration', 'var(--resp-color)', 'brpm');
+
+        drawTimeAxis(svg, x, totalH - 18, hMin, hMax);
+
+        const tooltip = createTooltip(document.querySelector('.viz-container'));
+
+        svg.on('mousemove', function(event) {
+          const [mx, my] = d3.pointer(event);
+          const hour = x.invert(mx);
+          if (mx < margin.left || mx > width - margin.right) {
+            tooltip.hide();
+            return;
+          }
+
+          let lines = [`<div class="tooltip-label">${formatHour(hour)}</div>`];
+
+          const seg = levels.find(l => hour >= l.start && hour < l.end);
+          if (seg) lines.push(`<div class="tooltip-value">${stageName(seg.stage)}</div>`);
+
+          const nearest = (arr, h) => {
+            if (!arr.length) return null;
+            let best = arr[0], bestD = Math.abs(arr[0].h - h);
+            for (const p of arr) {
+              const d = Math.abs(p.h - h);
+              if (d < bestD) { best = p; bestD = d; }
+            }
+            return bestD < 0.15 ? best : null;
+          };
+
+          const hrPt = nearest(hr, hour);
+          if (hrPt) lines.push(`<div style="color:var(--hr-color);font-size:0.7rem">HR: ${hrPt.v} bpm</div>`);
+          const battPt = nearest(battery, hour);
+          if (battPt) lines.push(`<div style="color:var(--battery-color);font-size:0.7rem">Battery: ${battPt.v}</div>`);
+          const stressPt = nearest(stress, hour);
+          if (stressPt) lines.push(`<div style="color:var(--stress-color);font-size:0.7rem">Stress: ${stressPt.v}</div>`);
+          const respPt = nearest(respiration, hour);
+          if (respPt) lines.push(`<div style="color:var(--resp-color);font-size:0.7rem">Resp: ${respPt.v} brpm</div>`);
+
+          const svgRect = svg.node().getBoundingClientRect();
+          const containerRect = document.querySelector('.viz-container').getBoundingClientRect();
+          const px = event.clientX - containerRect.left;
+          const py = event.clientY - containerRect.top;
+          tooltip.show(lines.join(''), px, py);
+        });
+
+        svg.on('mouseleave', () => tooltip.hide());
+      }
+
+      function drawHypnogram(svg, x, levels, hr, yOff, height, margin, innerW, hMin, hMax) {
+        const g = svg.append('g').attr('transform', `translate(0,${yOff})`);
+
+        const pad = 8;
+        const stageY = d3.scaleLinear().domain([0, 3]).range([height - pad, pad]);
+
+        g.append('text')
+          .attr('x', margin.left - 8)
+          .attr('y', -2)
+          .attr('text-anchor', 'end')
+          .attr('class', 'chart-label')
+          .attr('fill', 'var(--text-dim)')
+          .attr('font-size', '9px')
+          .text('STAGES + HR');
+
+        STAGE_LABELS.forEach((label, i) => {
+          const yPos = stageY(i);
+          g.append('line')
+            .attr('x1', margin.left)
+            .attr('x2', margin.left + innerW)
+            .attr('y1', yPos)
+            .attr('y2', yPos)
+            .attr('stroke', 'var(--border-subtle)')
+            .attr('stroke-dasharray', '2,3')
+            .attr('stroke-opacity', 0.6);
+
+          g.append('text')
+            .attr('x', margin.left - 6)
+            .attr('y', yPos + 3)
+            .attr('text-anchor', 'end')
+            .attr('fill', 'var(--text-dim)')
+            .attr('font-size', '9px')
+            .text(label);
+        });
+
+        levels.forEach(l => {
+          const stage = STAGE_Y[l.stage] != null ? STAGE_Y[l.stage] : 2;
+          const x1 = x(l.start);
+          const x2 = x(l.end);
+          const y1 = stageY(stage);
+          const rectH = height - pad - y1;
+
+          g.append('rect')
+            .attr('x', x1)
+            .attr('y', y1)
+            .attr('width', Math.max(x2 - x1, 0.5))
+            .attr('height', rectH)
+            .attr('fill', stageColor(l.stage))
+            .attr('opacity', 0.35);
+        });
+
+        const stepData = [];
+        levels.forEach(l => {
+          const stage = STAGE_Y[l.stage] != null ? STAGE_Y[l.stage] : 2;
+          stepData.push({ h: l.start, stage });
+          stepData.push({ h: l.end, stage });
+        });
+
+        if (stepData.length > 1) {
+          const stepLine = d3.line()
+            .x(d => x(d.h))
+            .y(d => stageY(d.stage))
+            .curve(d3.curveStepAfter);
+
+          g.append('path')
+            .datum(stepData)
+            .attr('d', stepLine)
+            .attr('fill', 'none')
+            .attr('stroke', 'var(--text)')
+            .attr('stroke-width', 1.5)
+            .attr('stroke-opacity', 0.7);
+        }
+
+        if (hr.length > 1) {
+          const hrExtent = d3.extent(hr, d => d.v);
+          const hrY = d3.scaleLinear()
+            .domain([hrExtent[0] - 5, hrExtent[1] + 5])
+            .range([height - pad, pad]);
+
+          const hrLine = d3.line()
+            .x(d => x(d.h))
+            .y(d => hrY(d.v))
+            .curve(d3.curveBasis);
+
+          g.append('path')
+            .datum(hr)
+            .attr('d', hrLine)
+            .attr('fill', 'none')
+            .attr('stroke', 'var(--hr-color)')
+            .attr('stroke-width', 1.2)
+            .attr('stroke-opacity', 0.6);
+
+          const hrAxis = d3.axisRight(hrY).ticks(4).tickSize(0);
+          g.append('g')
+            .attr('class', 'axis')
+            .attr('transform', `translate(${margin.left + innerW + 4},0)`)
+            .call(hrAxis)
+            .call(g => g.select('.domain').remove())
+            .call(g => g.selectAll('.tick text')
+              .attr('fill', 'var(--hr-color)')
+              .attr('font-size', '8px')
+              .attr('opacity', 0.7));
+        }
+      }
+
+      function drawAreaPanel(svg, x, data, yOff, height, margin, label, color, fixedDomain, filled) {
+        const g = svg.append('g').attr('transform', `translate(0,${yOff})`);
+        const pad = 4;
+
+        g.append('text')
+          .attr('x', margin.left - 8)
+          .attr('y', -2)
+          .attr('text-anchor', 'end')
+          .attr('class', 'chart-label')
+          .attr('fill', 'var(--text-dim)')
+          .attr('font-size', '9px')
+          .text(label.toUpperCase());
+
+        g.append('line')
+          .attr('x1', margin.left)
+          .attr('x2', margin.left + (x.range()[1] - x.range()[0]))
+          .attr('y1', 0)
+          .attr('y2', 0)
+          .attr('stroke', 'var(--border-subtle)');
+
+        if (!data.length) {
+          g.append('text')
+            .attr('x', margin.left + (x.range()[1] - x.range()[0]) / 2)
+            .attr('y', height / 2 + 3)
+            .attr('text-anchor', 'middle')
+            .attr('fill', 'var(--text-dim)')
+            .attr('font-size', '10px')
+            .text('No data');
+          return;
+        }
+
+        const ext = fixedDomain || d3.extent(data, d => d.v);
+        const yDomain = fixedDomain ? ext : [ext[0] - (ext[1] - ext[0]) * 0.1, ext[1] + (ext[1] - ext[0]) * 0.1];
+        const y = d3.scaleLinear().domain(yDomain).range([height - pad, pad]);
+
+        const area = d3.area()
+          .x(d => x(d.h))
+          .y0(height - pad)
+          .y1(d => y(d.v))
+          .curve(d3.curveBasis);
+
+        g.append('path')
+          .datum(data)
+          .attr('d', area)
+          .attr('fill', color)
+          .attr('opacity', 0.2);
+
+        const line = d3.line()
+          .x(d => x(d.h))
+          .y(d => y(d.v))
+          .curve(d3.curveBasis);
+
+        g.append('path')
+          .datum(data)
+          .attr('d', line)
+          .attr('fill', 'none')
+          .attr('stroke', color)
+          .attr('stroke-width', 1.2)
+          .attr('stroke-opacity', 0.8);
+
+        const yAxis = d3.axisRight(y).ticks(3).tickSize(0);
+        g.append('g')
+          .attr('class', 'axis')
+          .attr('transform', `translate(${x.range()[1] + 4},0)`)
+          .call(yAxis)
+          .call(g => g.select('.domain').remove())
+          .call(g => g.selectAll('.tick text')
+            .attr('fill', color)
+            .attr('font-size', '8px')
+            .attr('opacity', 0.7));
+      }
+
+      function drawLinePanel(svg, x, data, yOff, height, margin, label, color, unit) {
+        const g = svg.append('g').attr('transform', `translate(0,${yOff})`);
+        const pad = 4;
+
+        g.append('text')
+          .attr('x', margin.left - 8)
+          .attr('y', -2)
+          .attr('text-anchor', 'end')
+          .attr('class', 'chart-label')
+          .attr('fill', 'var(--text-dim)')
+          .attr('font-size', '9px')
+          .text(label.toUpperCase());
+
+        g.append('line')
+          .attr('x1', margin.left)
+          .attr('x2', x.range()[1])
+          .attr('y1', 0)
+          .attr('y2', 0)
+          .attr('stroke', 'var(--border-subtle)');
+
+        if (!data.length) {
+          g.append('text')
+            .attr('x', margin.left + (x.range()[1] - x.range()[0]) / 2)
+            .attr('y', height / 2 + 3)
+            .attr('text-anchor', 'middle')
+            .attr('fill', 'var(--text-dim)')
+            .attr('font-size', '10px')
+            .text('No data');
+          return;
+        }
+
+        const ext = d3.extent(data, d => d.v);
+        const pad2 = (ext[1] - ext[0]) * 0.15 || 1;
+        const y = d3.scaleLinear().domain([ext[0] - pad2, ext[1] + pad2]).range([height - pad, pad]);
+
+        const line = d3.line()
+          .x(d => x(d.h))
+          .y(d => y(d.v))
+          .curve(d3.curveBasis);
+
+        g.append('path')
+          .datum(data)
+          .attr('d', line)
+          .attr('fill', 'none')
+          .attr('stroke', color)
+          .attr('stroke-width', 1.2)
+          .attr('stroke-opacity', 0.8);
+
+        const yAxis = d3.axisRight(y).ticks(3).tickSize(0);
+        g.append('g')
+          .attr('class', 'axis')
+          .attr('transform', `translate(${x.range()[1] + 4},0)`)
+          .call(yAxis)
+          .call(g => g.select('.domain').remove())
+          .call(g => g.selectAll('.tick text')
+            .attr('fill', color)
+            .attr('font-size', '8px')
+            .attr('opacity', 0.7));
+      }
+
+      function drawTimeAxis(svg, x, yPos, hMin, hMax) {
+        const ticks = d3.range(Math.ceil(hMin), Math.floor(hMax) + 1, 1);
+        const axis = d3.axisBottom(x)
+          .tickValues(ticks)
+          .tickFormat(d => formatHour(d))
+          .tickSize(0);
+
+        svg.append('g')
+          .attr('class', 'axis')
+          .attr('transform', `translate(0,${yPos})`)
+          .call(axis)
+          .call(g => g.select('.domain').remove())
+          .call(g => g.selectAll('.tick text')
+            .attr('fill', 'var(--text-dim)')
+            .attr('font-size', '10px'));
+      }
+
+      function buildLegend() {
+        const container = document.getElementById('legend-area');
+        const legend = document.createElement('div');
+        legend.className = 'legend';
+        legend.style.marginTop = '1.5rem';
+
+        const stages = [
+          { label: 'Deep', color: 'var(--deep-bright)' },
+          { label: 'Light', color: 'var(--light-bright)' },
+          { label: 'REM', color: 'var(--rem-bright)' },
+          { label: 'Awake', color: 'var(--awake-bright)' },
+        ];
+        stages.forEach(s => {
+          const item = document.createElement('div');
+          item.className = 'legend-item';
+          const dot = document.createElement('span');
+          dot.className = 'legend-dot';
+          dot.style.background = s.color;
+          item.appendChild(dot);
+          item.appendChild(document.createTextNode(s.label));
+          legend.appendChild(item);
+        });
+
+        const signals = [
+          { label: 'Heart Rate', color: 'var(--hr-color)', type: 'line' },
+          { label: 'Body Battery', color: 'var(--battery-color)', type: 'area' },
+          { label: 'Stress', color: 'var(--stress-color)', type: 'area' },
+          { label: 'Respiration', color: 'var(--resp-color)', type: 'line' },
+        ];
+        signals.forEach(s => {
+          const item = document.createElement('div');
+          item.className = 'legend-item';
+          const swatch = document.createElement('span');
+          swatch.className = s.type === 'line' ? 'legend-line' : 'legend-area';
+          swatch.style.background = s.color;
+          item.appendChild(swatch);
+          item.appendChild(document.createTextNode(s.label));
+          legend.appendChild(item);
+        });
+
+        container.appendChild(legend);
+      }
+    });
+  </script>
+</body>
+</html>

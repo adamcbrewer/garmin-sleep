@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Weekday Fingerprint — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .clocks-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 1rem;
+      justify-items: center;
+    }
+
+    .clock-cell {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .clock-cell svg {
+      display: block;
+    }
+
+    .clock-label {
+      font-family: var(--font-display);
+      font-size: 1.1rem;
+      color: var(--text);
+      text-align: center;
+    }
+
+    .clock-stat {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      text-align: center;
+    }
+
+    .clock-count {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      text-align: center;
+      margin-top: -0.25rem;
+    }
+
+    @media (max-width: 960px) {
+      .clocks-grid {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+
+    @media (max-width: 600px) {
+      .clocks-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Weekday <em>Fingerprint</em>',
+      'All nights overlaid by day of week on radial clocks. Tight shapes reveal consistency; diffuse halos expose social jet lag.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = '<div class="viz-container"><div class="loading">Loading sleep data</div></div>';
+    const container = root.querySelector('.viz-container');
+
+    const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const DAY_LABELS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const SIZE = 180;
+    const OUTER_R = SIZE / 2 - 14;
+    const INNER_R = OUTER_R * 0.25;
+    const ARC_OPACITY = 0.18;
+
+    const stageColorMap = {
+      0: '#2563eb',
+      1: '#5b9bd5',
+      2: '#c45a8a',
+      3: '#d4a54a',
+    };
+
+    function hourToAngle(hour) {
+      return ((hour - 24) / 24) * 2 * Math.PI;
+    }
+
+    Promise.all([loadData('levels.json'), loadData('summary.json')]).then(([levels, summary]) => {
+      container.innerHTML = '';
+
+      const summaryByDate = new Map(summary.map(d => [d.date, d]));
+      const levelsByDate = d3.group(levels, d => d.date);
+
+      const byDay = new Map();
+      DAYS.forEach(day => byDay.set(day, []));
+      for (const [date, segs] of levelsByDate) {
+        const s = summaryByDate.get(date);
+        if (!s) continue;
+        const day = s.dayOfWeek;
+        if (byDay.has(day)) {
+          byDay.get(day).push({ date, segments: segs, totalSleep: s.totalSleep });
+        }
+      }
+
+      const grid = document.createElement('div');
+      grid.className = 'clocks-grid';
+      container.appendChild(grid);
+
+      const arcGen = d3.arc();
+
+      DAYS.forEach((day, di) => {
+        const nights = byDay.get(day);
+        const cell = document.createElement('div');
+        cell.className = 'clock-cell';
+        grid.appendChild(cell);
+
+        const cx = SIZE / 2;
+        const cy = SIZE / 2;
+
+        const svg = d3.select(cell)
+          .append('svg')
+          .attr('width', SIZE)
+          .attr('height', SIZE)
+          .attr('viewBox', `0 0 ${SIZE} ${SIZE}`);
+
+        const g = svg.append('g')
+          .attr('transform', `translate(${cx},${cy})`);
+
+        g.append('circle')
+          .attr('r', OUTER_R)
+          .attr('fill', 'none')
+          .attr('stroke', 'rgba(255,255,255,0.04)')
+          .attr('stroke-width', 0.5);
+
+        g.append('circle')
+          .attr('r', INNER_R)
+          .attr('fill', 'rgba(10,10,15,0.6)')
+          .attr('stroke', 'rgba(255,255,255,0.04)')
+          .attr('stroke-width', 0.5);
+
+        for (let h = 0; h < 24; h += 6) {
+          const angle = hourToAngle(h);
+          const x1 = Math.sin(angle) * INNER_R;
+          const y1 = -Math.cos(angle) * INNER_R;
+          const x2 = Math.sin(angle) * OUTER_R;
+          const y2 = -Math.cos(angle) * OUTER_R;
+          g.append('line')
+            .attr('x1', x1).attr('y1', y1)
+            .attr('x2', x2).attr('y2', y2)
+            .attr('stroke', 'rgba(255,255,255,0.06)')
+            .attr('stroke-width', 0.5);
+        }
+
+        const tickLabels = [
+          { hour: 0, label: '12a' },
+          { hour: 6, label: '6a' },
+          { hour: 12, label: '12p' },
+          { hour: 18, label: '6p' },
+        ];
+        const labelR = OUTER_R + 10;
+        tickLabels.forEach(({ hour, label }) => {
+          const angle = hourToAngle(hour);
+          const x = Math.sin(angle) * labelR;
+          const y = -Math.cos(angle) * labelR;
+          g.append('text')
+            .attr('x', x)
+            .attr('y', y)
+            .attr('text-anchor', 'middle')
+            .attr('dominant-baseline', 'central')
+            .attr('fill', 'rgba(255,255,255,0.2)')
+            .style('font-size', '7px')
+            .style('font-family', 'var(--font-mono)')
+            .text(label);
+        });
+
+        nights.forEach(night => {
+          night.segments.forEach(seg => {
+            const color = stageColorMap[seg.stage];
+            if (!color) return;
+
+            const startAngle = hourToAngle(seg.start);
+            const endAngle = hourToAngle(seg.end);
+
+            g.append('path')
+              .attr('d', arcGen({
+                innerRadius: INNER_R,
+                outerRadius: OUTER_R,
+                startAngle: startAngle,
+                endAngle: endAngle,
+              }))
+              .attr('fill', color)
+              .attr('opacity', ARC_OPACITY);
+          });
+        });
+
+        const label = document.createElement('div');
+        label.className = 'clock-label';
+        label.textContent = DAY_LABELS[di];
+        cell.appendChild(label);
+
+        if (nights.length > 0) {
+          const avgSleep = d3.mean(nights, n => n.totalSleep);
+          const stat = document.createElement('div');
+          stat.className = 'clock-stat';
+          stat.textContent = `avg ${formatDuration(avgSleep)}`;
+          cell.appendChild(stat);
+
+          const count = document.createElement('div');
+          count.className = 'clock-count';
+          count.textContent = `${nights.length} nights`;
+          cell.appendChild(count);
+        }
+      });
+
+      makeLegend(container);
+    });
+  </script>
+</body>
+</html>

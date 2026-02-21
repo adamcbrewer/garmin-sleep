@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sleep Cycle Wave — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .wave-controls {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .wave-controls label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .overlay-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .overlay-toggle input { accent-color: var(--accent); }
+    .stage-labels {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      position: absolute;
+      left: 0;
+      top: 0;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Sleep Cycle <em>Wave</em>',
+      'A smooth interpolated wave of sleep depth revealing ultradian rhythm — the ~90-minute cycles that structure every night of sleep.',
+      'Analytical'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="stats-row" id="stats-row"></div>
+      <div class="viz-container">
+        <div class="controls wave-controls" id="controls">
+          <label for="night-select">Night:</label>
+          <select class="control-select" id="night-select"></select>
+          <label class="overlay-toggle">
+            <input type="checkbox" id="overlay-toggle"> Show all nights overlay
+          </label>
+        </div>
+        <div class="viz-canvas" id="wave-canvas">
+          <div class="loading">Loading sleep data</div>
+        </div>
+        <div id="legend-container"></div>
+      </div>
+    `;
+
+    const STAGE_Y = { 0: 3, 1: 2, 2: 1, 3: 0 };
+    const STAGE_CLR = { 0: '#2563eb', 1: '#5b9bd5', 2: '#c45a8a', 3: '#d4a54a' };
+    const STAGE_NAMES = { 0: 'Deep', 1: 'Light', 2: 'REM', 3: 'Awake' };
+
+    loadData('nights_all.json').then(allNights => {
+      const dates = Object.keys(allNights)
+        .filter(d => allNights[d].levels && allNights[d].levels.length > 2)
+        .sort();
+
+      if (dates.length === 0) {
+        document.getElementById('wave-canvas').innerHTML =
+          '<p style="color:var(--text-dim);padding:2rem;">No nights with level data found.</p>';
+        return;
+      }
+
+      const select = document.getElementById('night-select');
+      dates.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d;
+        opt.textContent = formatDateLong(d);
+        select.appendChild(opt);
+      });
+      select.value = dates[dates.length - 1];
+
+      const width = 900;
+      const height = 360;
+      const margin = { top: 30, right: 30, bottom: 40, left: 70 };
+
+      function buildPoints(levels) {
+        const pts = [];
+        levels.forEach(seg => {
+          const stage = seg.stage;
+          if (stage < 0) return;
+          const mid = (seg.start + seg.end) / 2;
+          pts.push({ t: mid, y: STAGE_Y[stage], stage });
+        });
+        pts.sort((a, b) => a.t - b.t);
+        return pts;
+      }
+
+      function normalizeTime(levels) {
+        if (!levels.length) return [];
+        const t0 = levels[0].start;
+        return levels.map(l => ({
+          start: l.start - t0,
+          end: l.end - t0,
+          stage: l.stage,
+        }));
+      }
+
+      const allPoints = {};
+      let maxDuration = 0;
+      dates.forEach(d => {
+        const norm = normalizeTime(allNights[d].levels);
+        allPoints[d] = buildPoints(norm);
+        const dur = norm.length > 0 ? norm[norm.length - 1].end : 0;
+        if (dur > maxDuration) maxDuration = dur;
+      });
+
+      const canvas = document.getElementById('wave-canvas');
+
+      function render(selectedDate, showOverlay) {
+        canvas.innerHTML = '';
+
+        const pts = allPoints[selectedDate];
+        if (!pts || pts.length < 2) {
+          canvas.innerHTML = '<p style="color:var(--text-dim);padding:2rem;">No data for this night.</p>';
+          return;
+        }
+
+        const levels = normalizeTime(allNights[selectedDate].levels);
+        const nightDur = levels[levels.length - 1].end;
+
+        const svg = d3.select(canvas)
+          .append('svg')
+          .attr('viewBox', `0 0 ${width} ${height}`)
+          .attr('width', '100%')
+          .attr('preserveAspectRatio', 'xMidYMid meet');
+
+        const defs = svg.append('defs');
+
+        const innerW = width - margin.left - margin.right;
+        const innerH = height - margin.top - margin.bottom;
+
+        const xScale = d3.scaleLinear()
+          .domain([0, nightDur])
+          .range([0, innerW]);
+
+        const yScale = d3.scaleLinear()
+          .domain([0, 3])
+          .range([0, innerH]);
+
+        const g = svg.append('g')
+          .attr('transform', `translate(${margin.left},${margin.top})`);
+
+        const xAxis = d3.axisBottom(xScale)
+          .tickValues(d3.range(0, nightDur + 0.5, 1))
+          .tickFormat(d => {
+            const bedtime = allNights[selectedDate].levels[0].start;
+            return formatHour(bedtime + d);
+          });
+
+        g.append('g')
+          .attr('class', 'axis')
+          .attr('transform', `translate(0,${innerH})`)
+          .call(xAxis)
+          .call(g => g.select('.domain').remove());
+
+        const yStages = [
+          { y: 0, label: 'Awake' },
+          { y: 1, label: 'REM' },
+          { y: 2, label: 'Light' },
+          { y: 3, label: 'Deep' },
+        ];
+
+        yStages.forEach(({ y, label }) => {
+          const yPos = yScale(y);
+          g.append('line')
+            .attr('x1', 0).attr('x2', innerW)
+            .attr('y1', yPos).attr('y2', yPos)
+            .attr('stroke', 'var(--border-subtle)')
+            .attr('stroke-opacity', 0.5)
+            .attr('stroke-dasharray', '3,4');
+
+          g.append('text')
+            .attr('x', -10)
+            .attr('y', yPos)
+            .attr('text-anchor', 'end')
+            .attr('dominant-baseline', 'central')
+            .attr('fill', STAGE_CLR[3 - y] || 'var(--text-dim)')
+            .attr('font-size', '10px')
+            .attr('font-weight', 500)
+            .text(label);
+        });
+
+        const gradId = 'wave-grad';
+        const linearGrad = defs.append('linearGradient')
+          .attr('id', gradId)
+          .attr('x1', '0').attr('y1', '0')
+          .attr('x2', '0').attr('y2', '1');
+
+        linearGrad.append('stop').attr('offset', '0%').attr('stop-color', STAGE_CLR[3]).attr('stop-opacity', 0.5);
+        linearGrad.append('stop').attr('offset', '33%').attr('stop-color', STAGE_CLR[2]).attr('stop-opacity', 0.4);
+        linearGrad.append('stop').attr('offset', '66%').attr('stop-color', STAGE_CLR[1]).attr('stop-opacity', 0.35);
+        linearGrad.append('stop').attr('offset', '100%').attr('stop-color', STAGE_CLR[0]).attr('stop-opacity', 0.5);
+
+        if (showOverlay) {
+          dates.forEach(d => {
+            if (d === selectedDate) return;
+            const op = allPoints[d];
+            if (!op || op.length < 2) return;
+
+            const oLine = d3.line()
+              .x(p => xScale(p.t))
+              .y(p => yScale(p.y))
+              .curve(d3.curveCatmullRom.alpha(0.5));
+
+            g.append('path')
+              .datum(op.filter(p => p.t <= nightDur * 1.1))
+              .attr('d', oLine)
+              .attr('fill', 'none')
+              .attr('stroke', 'var(--text-dim)')
+              .attr('stroke-width', 0.5)
+              .attr('stroke-opacity', 0.08);
+          });
+        }
+
+        const area = d3.area()
+          .x(p => xScale(p.t))
+          .y0(innerH)
+          .y1(p => yScale(p.y))
+          .curve(d3.curveCatmullRom.alpha(0.5));
+
+        g.append('path')
+          .datum(pts)
+          .attr('d', area)
+          .attr('fill', `url(#${gradId})`);
+
+        const segColors = defs.append('linearGradient')
+          .attr('id', 'wave-stroke-grad')
+          .attr('gradientUnits', 'userSpaceOnUse')
+          .attr('x1', xScale(pts[0].t))
+          .attr('y1', 0)
+          .attr('x2', xScale(pts[pts.length - 1].t))
+          .attr('y2', 0);
+
+        pts.forEach((p, i) => {
+          const pct = (xScale(p.t) - xScale(pts[0].t)) / (xScale(pts[pts.length - 1].t) - xScale(pts[0].t)) * 100;
+          const stageKey = [3, 2, 1, 0][Math.round(p.y)];
+          segColors.append('stop')
+            .attr('offset', `${pct}%`)
+            .attr('stop-color', STAGE_CLR[stageKey] || '#5b9bd5');
+        });
+
+        const line = d3.line()
+          .x(p => xScale(p.t))
+          .y(p => yScale(p.y))
+          .curve(d3.curveCatmullRom.alpha(0.5));
+
+        g.append('path')
+          .datum(pts)
+          .attr('d', line)
+          .attr('fill', 'none')
+          .attr('stroke', 'url(#wave-stroke-grad)')
+          .attr('stroke-width', 2.5)
+          .attr('stroke-linecap', 'round');
+
+        g.selectAll('.wave-dot')
+          .data(pts)
+          .enter()
+          .append('circle')
+          .attr('cx', p => xScale(p.t))
+          .attr('cy', p => yScale(p.y))
+          .attr('r', 2.5)
+          .attr('fill', p => {
+            const stageKey = [3, 2, 1, 0][Math.round(p.y)];
+            return STAGE_CLR[stageKey];
+          })
+          .attr('opacity', 0.7);
+
+        const tip = createTooltip(canvas.closest('.viz-container'));
+        const overlay = g.append('rect')
+          .attr('width', innerW)
+          .attr('height', innerH)
+          .attr('fill', 'transparent');
+
+        overlay.on('mousemove', function (e) {
+          const [mx] = d3.pointer(e);
+          const t = xScale.invert(mx);
+          const closest = pts.reduce((a, b) => Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a);
+          const stageKey = [3, 2, 1, 0][Math.round(closest.y)];
+          const bedtime = allNights[selectedDate].levels[0].start;
+          const containerRect = canvas.closest('.viz-container').getBoundingClientRect();
+          const svgRect = canvas.querySelector('svg').getBoundingClientRect();
+          tip.show(
+            `<div class="tooltip-label">${formatHour(bedtime + closest.t)}</div>` +
+            `<div class="tooltip-value" style="color:${STAGE_CLR[stageKey]}">${STAGE_NAMES[stageKey]}</div>`,
+            e.clientX - containerRect.left,
+            e.clientY - containerRect.top
+          );
+        }).on('mouseleave', () => tip.hide());
+
+        // stats
+        const summary = allNights[selectedDate].summary;
+        const cycleDurations = [];
+        let deepIdx = -1;
+        for (let i = 0; i < pts.length; i++) {
+          if (pts[i].y === 3) {
+            if (deepIdx >= 0) {
+              cycleDurations.push((pts[i].t - pts[deepIdx].t) * 60);
+            }
+            deepIdx = i;
+          }
+        }
+        const avgCycle = cycleDurations.length > 0
+          ? Math.round(d3.mean(cycleDurations))
+          : null;
+
+        document.getElementById('stats-row').innerHTML = `
+          <div class="stat">
+            <div class="stat-value">${formatDuration(nightDur * 3600)}</div>
+            <div class="stat-label">Night Duration</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${pts.length}</div>
+            <div class="stat-label">Sleep Segments</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${avgCycle ? avgCycle + 'm' : '—'}</div>
+            <div class="stat-label">Avg Cycle Length</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">${dates.length}</div>
+            <div class="stat-label">Nights Available</div>
+          </div>
+        `;
+      }
+
+      render(select.value, false);
+
+      select.addEventListener('change', () => {
+        render(select.value, document.getElementById('overlay-toggle').checked);
+      });
+
+      document.getElementById('overlay-toggle').addEventListener('change', (e) => {
+        render(select.value, e.target.checked);
+      });
+
+      makeLegend(document.getElementById('legend-container'));
+    });
+  </script>
+</body>
+</html>

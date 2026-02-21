@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scatter Matrix — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .splom-cell rect.cell-bg {
+      fill: var(--bg-elevated);
+      stroke: var(--border-subtle);
+      stroke-width: 0.5;
+    }
+
+    .splom-cell circle {
+      transition: opacity 0.1s, r 0.1s;
+    }
+
+    .splom-cell circle.dimmed {
+      opacity: 0.06 !important;
+    }
+
+    .splom-cell circle.highlighted {
+      opacity: 1 !important;
+      stroke: #fff;
+      stroke-width: 1.5;
+    }
+
+    .legend-gradient {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-top: 1.25rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .legend-gradient-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+
+    .legend-gradient canvas {
+      height: 14px;
+      width: 180px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Scatter <em>Matrix</em>',
+      'Every pairwise combination of 6 key sleep metrics plotted against each other. Hover a point to highlight that night across all cells — find your personal correlations.',
+      'Comparative'
+    );
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="stats-row" id="stats-row">
+        <div class="stat"><div class="stat-value" id="stat-nights">—</div><div class="stat-label">Nights</div></div>
+        <div class="stat"><div class="stat-value" id="stat-avg-eff">—</div><div class="stat-label">Avg Efficiency</div></div>
+        <div class="stat"><div class="stat-value" id="stat-avg-sleep">—</div><div class="stat-label">Avg Total Sleep</div></div>
+        <div class="stat"><div class="stat-value" id="stat-avg-deep">—</div><div class="stat-label">Avg Deep</div></div>
+      </div>
+      <div class="viz-container">
+        <div class="viz-canvas" id="canvas"><div class="loading">Loading sleep data</div></div>
+        <div class="legend-gradient" id="legend">
+          <span class="legend-gradient-label">Low efficiency</span>
+          <canvas id="legend-canvas" width="180" height="14"></canvas>
+          <span class="legend-gradient-label">High efficiency</span>
+        </div>
+      </div>
+    `;
+
+    const METRICS = [
+      { key: 'totalSleep', label: 'Total Sleep', fmt: v => formatDuration(v), short: 'Sleep' },
+      { key: 'deep',       label: 'Deep Sleep',  fmt: v => formatDuration(v), short: 'Deep' },
+      { key: 'rem',        label: 'REM Sleep',   fmt: v => formatDuration(v), short: 'REM' },
+      { key: 'efficiency', label: 'Efficiency',  fmt: v => v.toFixed(1) + '%', short: 'Eff %' },
+      { key: 'avgHR',      label: 'Avg HR',      fmt: v => Math.round(v) + ' bpm', short: 'Avg HR' },
+      { key: 'bodyBatteryChange', label: 'Body Battery Δ', fmt: v => (v >= 0 ? '+' : '') + v, short: 'BB Δ' },
+    ];
+
+    const N = METRICS.length;
+    const CELL = 130;
+    const PAD = 15;
+
+    loadData('summary.json').then(summary => {
+      const data = summary.filter(d => {
+        return METRICS.every(m => d[m.key] != null && !isNaN(d[m.key]));
+      });
+
+      data.forEach(d => { d._date = new Date(d.date + 'T12:00:00'); });
+      data.sort((a, b) => a._date - b._date);
+
+      const effExtent = d3.extent(data, d => d.efficiency);
+      const colorScale = d3.scaleSequential(d3.interpolateRdYlGn).domain([effExtent[0], effExtent[1]]);
+
+      const scales = {};
+      METRICS.forEach(m => {
+        const ext = d3.extent(data, d => d[m.key]);
+        const padding = (ext[1] - ext[0]) * 0.05 || 1;
+        scales[m.key] = d3.scaleLinear()
+          .domain([ext[0] - padding, ext[1] + padding])
+          .range([PAD, CELL - PAD]);
+      });
+
+      const labelArea = 40;
+      const totalSize = N * CELL + labelArea;
+      const svgW = totalSize + 20;
+      const svgH = totalSize + 20;
+
+      const canvas = document.getElementById('canvas');
+      canvas.innerHTML = '';
+      const tooltip = createTooltip(canvas.closest('.viz-container'));
+
+      const svg = d3.select(canvas)
+        .append('svg')
+        .attr('viewBox', `0 0 ${svgW} ${svgH}`)
+        .attr('width', '100%')
+        .attr('preserveAspectRatio', 'xMidYMid meet');
+
+      const offsetX = labelArea + 10;
+      const offsetY = 10;
+
+      const allDots = [];
+
+      for (let row = 0; row < N; row++) {
+        for (let col = 0; col < N; col++) {
+          const mx = METRICS[col];
+          const my = METRICS[row];
+          const cx = offsetX + col * CELL;
+          const cy = offsetY + row * CELL;
+
+          const cellG = svg.append('g')
+            .attr('class', 'splom-cell')
+            .attr('transform', `translate(${cx},${cy})`);
+
+          cellG.append('rect')
+            .attr('class', 'cell-bg')
+            .attr('width', CELL)
+            .attr('height', CELL)
+            .attr('rx', 3);
+
+          if (row === col) {
+            cellG.append('text')
+              .attr('x', CELL / 2)
+              .attr('y', CELL / 2 - 4)
+              .attr('text-anchor', 'middle')
+              .attr('dominant-baseline', 'central')
+              .attr('fill', 'var(--text)')
+              .attr('font-size', '11px')
+              .attr('font-weight', '500')
+              .text(mx.short);
+
+            const ext = d3.extent(data, d => d[mx.key]);
+            cellG.append('text')
+              .attr('x', CELL / 2)
+              .attr('y', CELL / 2 + 14)
+              .attr('text-anchor', 'middle')
+              .attr('fill', 'var(--text-dim)')
+              .attr('font-size', '8px')
+              .attr('font-family', 'var(--font-mono)')
+              .text(`${mx.fmt(ext[0])} – ${mx.fmt(ext[1])}`);
+
+            const histScale = d3.scaleLinear().domain(ext).range([PAD, CELL - PAD]);
+            const bins = d3.bin()
+              .domain(ext)
+              .thresholds(15)
+              .value(d => d[mx.key])(data);
+
+            const histY = d3.scaleLinear()
+              .domain([0, d3.max(bins, b => b.length)])
+              .range([0, 25]);
+
+            const barW = Math.max(1, (CELL - 2 * PAD) / bins.length - 0.5);
+            bins.forEach(b => {
+              cellG.append('rect')
+                .attr('x', histScale(b.x0))
+                .attr('y', CELL - PAD - histY(b.length))
+                .attr('width', Math.max(barW, 1))
+                .attr('height', histY(b.length))
+                .attr('fill', 'var(--accent)')
+                .attr('opacity', 0.25)
+                .attr('rx', 0.5);
+            });
+
+            continue;
+          }
+
+          const xScale = scales[mx.key];
+          const yScale = d3.scaleLinear()
+            .domain(scales[my.key].domain())
+            .range([CELL - PAD, PAD]);
+
+          if (row === N - 1) {
+            const ticks = xScale.ticks(3);
+            ticks.forEach(t => {
+              cellG.append('line')
+                .attr('x1', xScale(t)).attr('x2', xScale(t))
+                .attr('y1', CELL - PAD).attr('y2', CELL - PAD + 3)
+                .attr('stroke', 'var(--text-dim)')
+                .attr('stroke-width', 0.5);
+            });
+          }
+
+          if (col === 0) {
+            const ticks = yScale.ticks(3);
+            ticks.forEach(t => {
+              cellG.append('line')
+                .attr('x1', PAD - 3).attr('x2', PAD)
+                .attr('y1', yScale(t)).attr('y2', yScale(t))
+                .attr('stroke', 'var(--text-dim)')
+                .attr('stroke-width', 0.5);
+            });
+          }
+
+          data.forEach((d, i) => {
+            const dot = cellG.append('circle')
+              .attr('cx', xScale(d[mx.key]))
+              .attr('cy', yScale(d[my.key]))
+              .attr('r', 3)
+              .attr('fill', colorScale(d.efficiency))
+              .attr('opacity', 0.5)
+              .attr('data-idx', i);
+
+            allDots.push({ el: dot, idx: i, row, col, cx: cx + xScale(d[mx.key]), cy: cy + yScale(d[my.key]) });
+          });
+        }
+      }
+
+      METRICS.forEach((m, i) => {
+        svg.append('text')
+          .attr('x', offsetX - 6)
+          .attr('y', offsetY + i * CELL + CELL / 2)
+          .attr('text-anchor', 'end')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', 'var(--text-muted)')
+          .attr('font-size', '9px')
+          .attr('font-family', 'var(--font-mono)')
+          .text(m.short);
+      });
+
+      const overlay = svg.append('rect')
+        .attr('width', svgW)
+        .attr('height', svgH)
+        .attr('fill', 'none')
+        .attr('pointer-events', 'all');
+
+      let activeIdx = -1;
+
+      overlay.on('mousemove', function(event) {
+        const [mx, my] = d3.pointer(event);
+        let closest = null;
+        let closestDist = Infinity;
+
+        allDots.forEach(d => {
+          const dx = mx - d.cx;
+          const dy = my - d.cy;
+          const dist = dx * dx + dy * dy;
+          if (dist < closestDist) {
+            closestDist = dist;
+            closest = d;
+          }
+        });
+
+        if (!closest || closestDist > 20 * 20) {
+          if (activeIdx !== -1) {
+            activeIdx = -1;
+            allDots.forEach(d => {
+              d.el.classed('dimmed', false).classed('highlighted', false)
+                .attr('r', 3).attr('opacity', 0.5);
+            });
+            tooltip.hide();
+          }
+          return;
+        }
+
+        if (closest.idx === activeIdx) return;
+        activeIdx = closest.idx;
+
+        allDots.forEach(d => {
+          if (d.idx === activeIdx) {
+            d.el.classed('dimmed', false).classed('highlighted', true)
+              .attr('r', 5).attr('opacity', 1).raise();
+          } else {
+            d.el.classed('highlighted', false).classed('dimmed', true)
+              .attr('r', 3).attr('opacity', 0.5);
+          }
+        });
+
+        const night = data[activeIdx];
+        const lines = [
+          `<div class="tooltip-label">${formatDateLong(night.date)}</div>`,
+          ...METRICS.map(m =>
+            `<div style="margin-top:2px"><span style="color:var(--text-dim);font-size:0.6rem">${m.short}:</span> <span class="tooltip-value">${m.fmt(night[m.key])}</span></div>`
+          ),
+        ];
+
+        const containerRect = canvas.closest('.viz-container').getBoundingClientRect();
+        const svgEl = canvas.querySelector('svg');
+        const svgRect = svgEl.getBoundingClientRect();
+        const scaleX = svgRect.width / svgW;
+        const scaleY = svgRect.height / svgH;
+        const px = closest.cx * scaleX + svgRect.left - containerRect.left;
+        const py = closest.cy * scaleY + svgRect.top - containerRect.top;
+        tooltip.show(lines.join(''), px, py);
+      });
+
+      overlay.on('mouseleave', function() {
+        activeIdx = -1;
+        allDots.forEach(d => {
+          d.el.classed('dimmed', false).classed('highlighted', false)
+            .attr('r', 3).attr('opacity', 0.5);
+        });
+        tooltip.hide();
+      });
+
+      const legendCanvas = document.getElementById('legend-canvas');
+      const ctx = legendCanvas.getContext('2d');
+      for (let i = 0; i < legendCanvas.width; i++) {
+        const t = effExtent[0] + (effExtent[1] - effExtent[0]) * (i / (legendCanvas.width - 1));
+        ctx.fillStyle = colorScale(t);
+        ctx.fillRect(i, 0, 1, legendCanvas.height);
+      }
+
+      const avgEff = d3.mean(data, d => d.efficiency);
+      const avgSleep = d3.mean(data, d => d.totalSleep);
+      const avgDeep = d3.mean(data, d => d.deep);
+
+      document.getElementById('stat-nights').textContent = data.length;
+      document.getElementById('stat-avg-eff').textContent = avgEff.toFixed(1) + '%';
+      document.getElementById('stat-avg-sleep').textContent = formatDuration(avgSleep);
+      document.getElementById('stat-avg-deep').textContent = formatDuration(avgDeep);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tree Rings — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .viz-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 70vh;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <nav class="nav">
+      <a href="../index.html" class="nav-back">
+        <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        All Visualizations
+      </a>
+      <span class="nav-category">Data Art</span>
+    </nav>
+    <h1>Tree <em>Rings</em></h1>
+    <p class="subtitle">Each night of sleep rendered as a concentric ring in a tree cross-section. Color encodes sleep stage, angle encodes time of night. A fingerprint of your sleep history.</p>
+    <div class="viz-container" id="viz-root">
+      <div class="loading">Loading sleep data</div>
+    </div>
+    <div id="legend-root"></div>
+  </div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    const RING_WIDTH = 3;
+    const RING_GAP = 1;
+    const RING_STEP = RING_WIDTH + RING_GAP;
+
+    const stageColorMap = {
+      0: '#2563eb',
+      1: '#5b9bd5',
+      2: '#c45a8a',
+      3: '#d4a54a',
+    };
+
+    function hourToAngle(hour) {
+      return ((hour - 24) / 24) * 2 * Math.PI;
+    }
+
+    Promise.all([loadData('levels.json'), loadData('summary.json')]).then(([levels, summary]) => {
+      const container = document.getElementById('viz-root');
+      container.innerHTML = '';
+
+      const dates = [...new Set(levels.map(d => d.date))].sort();
+      if (dates.length === 0) return;
+
+      const nightsByDate = d3.group(levels, d => d.date);
+
+      const innerRadius = 30;
+      const outerRadius = innerRadius + dates.length * RING_STEP;
+      const labelMargin = 50;
+      const size = (outerRadius + labelMargin) * 2;
+      const cx = size / 2;
+      const cy = size / 2;
+
+      const svg = d3.select(container)
+        .append('svg')
+        .attr('viewBox', `0 0 ${size} ${size}`)
+        .attr('width', '100%')
+        .attr('preserveAspectRatio', 'xMidYMid meet')
+        .style('max-height', '80vh');
+
+      const g = svg.append('g')
+        .attr('transform', `translate(${cx},${cy})`);
+
+      const gridG = g.append('g').attr('class', 'grid-lines');
+      for (let h = 0; h < 24; h++) {
+        const angle = hourToAngle(h);
+        const x1 = Math.sin(angle) * (innerRadius - 4);
+        const y1 = -Math.cos(angle) * (innerRadius - 4);
+        const x2 = Math.sin(angle) * (outerRadius + 4);
+        const y2 = -Math.cos(angle) * (outerRadius + 4);
+        gridG.append('line')
+          .attr('x1', x1).attr('y1', y1)
+          .attr('x2', x2).attr('y2', y2)
+          .attr('stroke', h % 6 === 0 ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)')
+          .attr('stroke-width', h % 6 === 0 ? 0.8 : 0.4);
+      }
+
+      const clockLabels = [
+        { hour: 0, label: '12am' },
+        { hour: 6, label: '6am' },
+        { hour: 12, label: '12pm' },
+        { hour: 18, label: '6pm' },
+      ];
+      const labelR = outerRadius + 20;
+      clockLabels.forEach(({ hour, label }) => {
+        const angle = hourToAngle(hour);
+        const x = Math.sin(angle) * labelR;
+        const y = -Math.cos(angle) * labelR;
+        g.append('text')
+          .attr('x', x)
+          .attr('y', y)
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'central')
+          .attr('fill', 'rgba(255,255,255,0.3)')
+          .style('font-size', '11px')
+          .style('font-family', 'var(--font-mono)')
+          .text(label);
+      });
+
+      const arcGen = d3.arc();
+      const ringsG = g.append('g').attr('class', 'rings');
+
+      dates.forEach((date, i) => {
+        const segments = nightsByDate.get(date);
+        if (!segments) return;
+
+        const r0 = innerRadius + i * RING_STEP;
+        const r1 = r0 + RING_WIDTH;
+
+        segments.forEach(seg => {
+          const color = stageColorMap[seg.stage];
+          if (!color) return;
+
+          const startAngle = hourToAngle(seg.start);
+          const endAngle = hourToAngle(seg.end);
+
+          ringsG.append('path')
+            .attr('d', arcGen({
+              innerRadius: r0,
+              outerRadius: r1,
+              startAngle: startAngle,
+              endAngle: endAngle,
+            }))
+            .attr('fill', color)
+            .attr('opacity', 0.85);
+        });
+      });
+
+      const rimG = g.append('g');
+      rimG.append('circle')
+        .attr('r', innerRadius - 2)
+        .attr('fill', 'rgba(10,10,15,0.9)')
+        .attr('stroke', 'rgba(255,255,255,0.06)')
+        .attr('stroke-width', 0.5);
+
+      rimG.append('circle')
+        .attr('r', outerRadius + 2)
+        .attr('fill', 'none')
+        .attr('stroke', 'rgba(255,255,255,0.06)')
+        .attr('stroke-width', 0.5);
+
+      const firstDate = formatDate(dates[0]);
+      const lastDate = formatDate(dates[dates.length - 1]);
+      g.append('text')
+        .attr('y', -4)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'rgba(255,255,255,0.35)')
+        .style('font-size', '7px')
+        .style('font-family', 'var(--font-mono)')
+        .text(firstDate);
+      g.append('text')
+        .attr('y', 6)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'rgba(255,255,255,0.25)')
+        .style('font-size', '5px')
+        .style('font-family', 'var(--font-mono)')
+        .text(lastDate);
+
+      g.append('text')
+        .attr('y', -outerRadius - 38)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'rgba(255,255,255,0.2)')
+        .style('font-size', '9px')
+        .style('font-family', 'var(--font-mono)')
+        .text(`${dates.length} nights`);
+
+      makeLegend(document.getElementById('legend-root'));
+    });
+  </script>
+</body>
+</html>

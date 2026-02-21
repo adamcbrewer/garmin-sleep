@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sleep DJ Mixer — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .mixer-layout {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .filter-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1.25rem;
+      box-shadow: var(--shadow-card);
+      position: relative;
+      overflow: hidden;
+      align-self: start;
+    }
+
+    .filter-panel::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.2), transparent);
+    }
+
+    .filter-group {
+      margin-bottom: 1rem;
+    }
+
+    .filter-group:last-of-type { margin-bottom: 0; }
+
+    .filter-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 0.7rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-bottom: 0.4rem;
+    }
+
+    .filter-value {
+      font-family: var(--font-mono);
+      color: var(--accent);
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 0.7rem;
+    }
+
+    .range-track {
+      position: relative;
+      height: 28px;
+      display: flex;
+      align-items: center;
+    }
+
+    .range-track input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      position: absolute;
+      width: 100%;
+      height: 4px;
+      background: transparent;
+      pointer-events: none;
+      outline: none;
+    }
+
+    .range-track input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid var(--bg-card);
+      box-shadow: 0 0 6px rgba(139, 92, 246, 0.4);
+      cursor: pointer;
+      pointer-events: all;
+      position: relative;
+      z-index: 2;
+    }
+
+    .range-track input[type="range"]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid var(--bg-card);
+      box-shadow: 0 0 6px rgba(139, 92, 246, 0.4);
+      cursor: pointer;
+      pointer-events: all;
+    }
+
+    .range-bg {
+      position: absolute;
+      width: 100%;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+    }
+
+    .range-fill {
+      position: absolute;
+      height: 4px;
+      background: var(--accent);
+      border-radius: 2px;
+      opacity: 0.5;
+    }
+
+    .range-bounds {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      margin-top: -2px;
+    }
+
+    .presets {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.25rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .preset-btn {
+      font-family: var(--font-body);
+      font-size: 0.7rem;
+      font-weight: 400;
+      padding: 0.3rem 0.6rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .preset-btn:hover {
+      border-color: var(--accent-muted);
+      color: var(--text);
+    }
+
+    .preset-btn.active {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .match-count {
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+
+    .match-count .big {
+      font-family: var(--font-mono);
+      font-size: 2.4rem;
+      font-weight: 300;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    .match-count .of {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin: 0 0.2rem;
+    }
+
+    .match-count .total {
+      font-family: var(--font-mono);
+      font-size: 1.4rem;
+      font-weight: 300;
+      color: var(--text-dim);
+    }
+
+    .match-count .label {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-top: 0.2rem;
+    }
+
+    .barcode-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      box-shadow: var(--shadow-card);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .barcode-panel::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.2), transparent);
+    }
+
+    .barcode-canvas-wrapper {
+      overflow-x: auto;
+    }
+
+    .barcode-canvas-wrapper canvas {
+      display: block;
+    }
+
+    @media (max-width: 900px) {
+      .mixer-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Sleep DJ <em>Mixer</em>',
+      'Filter nights by criteria with range sliders. Matching nights light up in the barcode — the rest fade out.',
+      'Interactive'
+    );
+
+    const root = document.getElementById('viz-root');
+
+    const FILTERS = [
+      { id: 'totalSleep', label: 'Total Sleep', unit: 'h', min: 3, max: 12, step: 0.25, fmt: v => v.toFixed(1) + 'h', extract: d => d.totalSleep / 3600 },
+      { id: 'deep',       label: 'Deep Sleep',  unit: 'min', min: 0, max: 180, step: 5, fmt: v => v + 'm', extract: d => d.deep / 60 },
+      { id: 'rem',        label: 'REM',          unit: 'min', min: 0, max: 180, step: 5, fmt: v => v + 'm', extract: d => d.rem / 60 },
+      { id: 'efficiency', label: 'Efficiency',   unit: '%', min: 50, max: 100, step: 1, fmt: v => v + '%', extract: d => d.efficiency },
+      { id: 'bbc',        label: 'Battery Change', unit: '', min: -20, max: 80, step: 1, fmt: v => (v > 0 ? '+' : '') + v, extract: d => d.bodyBatteryChange },
+      { id: 'avgHR',      label: 'Avg HR',       unit: 'bpm', min: 40, max: 100, step: 1, fmt: v => v, extract: d => d.avgHR },
+      { id: 'bedtime',    label: 'Bedtime',      unit: '', min: 20, max: 27, step: 0.25, fmt: v => formatHour(v % 24), extract: d => d.bedtime },
+    ];
+
+    const state = {};
+    FILTERS.forEach(f => {
+      state[f.id] = { lo: f.min, hi: f.max };
+    });
+
+    let summaryData = [];
+    let levelsData = [];
+    let activePreset = null;
+
+    root.innerHTML = `
+      <div class="mixer-layout">
+        <div class="filter-panel">
+          <div class="presets" id="presets"></div>
+          <div id="filter-sliders"></div>
+        </div>
+        <div>
+          <div class="match-count" id="match-count"></div>
+          <div class="barcode-panel">
+            <div class="barcode-canvas-wrapper" id="barcode-wrapper">
+              <div class="loading">Loading sleep data</div>
+            </div>
+            <div class="legend" id="legend"></div>
+          </div>
+        </div>
+      </div>
+      <div class="stats-row" id="summary-stats"></div>
+    `;
+
+    function buildPresets() {
+      const container = document.getElementById('presets');
+      const presets = [
+        { id: 'best', label: 'Best Nights', apply: () => { state.efficiency.lo = 95; state.deep.lo = 60; } },
+        { id: 'worst', label: 'Worst Nights', apply: () => { state.totalSleep.hi = 6; state.efficiency.hi = 85; } },
+        { id: 'weekend', label: 'Weekend', apply: () => {} },
+        { id: 'reset', label: 'Reset All', apply: () => {} },
+      ];
+      presets.forEach(p => {
+        const btn = document.createElement('button');
+        btn.className = 'preset-btn';
+        btn.textContent = p.label;
+        btn.dataset.preset = p.id;
+        btn.addEventListener('click', () => {
+          resetFilters();
+          if (p.id !== 'reset') {
+            p.apply();
+            activePreset = p.id;
+          } else {
+            activePreset = null;
+          }
+          syncSlidersToState();
+          update();
+          highlightPreset();
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function highlightPreset() {
+      document.querySelectorAll('.preset-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.preset === activePreset);
+      });
+    }
+
+    function resetFilters() {
+      FILTERS.forEach(f => {
+        state[f.id] = { lo: f.min, hi: f.max };
+      });
+    }
+
+    function buildSliders() {
+      const container = document.getElementById('filter-sliders');
+      FILTERS.forEach(f => {
+        const group = document.createElement('div');
+        group.className = 'filter-group';
+        group.innerHTML = `
+          <div class="filter-label">
+            <span>${f.label}</span>
+            <span class="filter-value" id="val-${f.id}"></span>
+          </div>
+          <div class="range-track">
+            <div class="range-bg"></div>
+            <div class="range-fill" id="fill-${f.id}"></div>
+            <input type="range" id="lo-${f.id}" min="${f.min}" max="${f.max}" step="${f.step}" value="${f.min}">
+            <input type="range" id="hi-${f.id}" min="${f.min}" max="${f.max}" step="${f.step}" value="${f.max}">
+          </div>
+          <div class="range-bounds">
+            <span>${f.fmt(f.min)}</span>
+            <span>${f.fmt(f.max)}</span>
+          </div>
+        `;
+        container.appendChild(group);
+
+        const loInput = group.querySelector(`#lo-${f.id}`);
+        const hiInput = group.querySelector(`#hi-${f.id}`);
+
+        const onInput = () => {
+          let lo = parseFloat(loInput.value);
+          let hi = parseFloat(hiInput.value);
+          if (lo > hi) {
+            if (document.activeElement === loInput) { lo = hi; loInput.value = lo; }
+            else { hi = lo; hiInput.value = hi; }
+          }
+          state[f.id] = { lo, hi };
+          activePreset = null;
+          highlightPreset();
+          update();
+        };
+
+        loInput.addEventListener('input', onInput);
+        hiInput.addEventListener('input', onInput);
+      });
+    }
+
+    function syncSlidersToState() {
+      FILTERS.forEach(f => {
+        document.getElementById(`lo-${f.id}`).value = state[f.id].lo;
+        document.getElementById(`hi-${f.id}`).value = state[f.id].hi;
+      });
+    }
+
+    function getMatching() {
+      return summaryData.filter(d => {
+        if (activePreset === 'weekend') {
+          if (d.dayOfWeek !== 'Fri' && d.dayOfWeek !== 'Sat') return false;
+        }
+        return FILTERS.every(f => {
+          const val = f.extract(d);
+          if (val == null) return true;
+          return val >= state[f.id].lo && val <= state[f.id].hi;
+        });
+      });
+    }
+
+    const ROW_H = 5;
+    const ROW_GAP = 1;
+    const STRIP = ROW_H + ROW_GAP;
+    const MARGIN = { top: 30, right: 16, bottom: 8, left: 72 };
+    const TIME_MIN = 19;
+    const TIME_MAX = 34;
+    const COLORS = { 0: '#2563eb', 1: '#5b9bd5', 2: '#c45a8a', 3: '#d4a54a' };
+
+    let canvas, ctx, dates, levelsByDate, canvasW, innerW;
+
+    function initCanvas() {
+      const wrapper = document.getElementById('barcode-wrapper');
+      wrapper.innerHTML = '';
+      canvasW = wrapper.clientWidth;
+      innerW = canvasW - MARGIN.left - MARGIN.right;
+      const height = MARGIN.top + dates.length * STRIP + MARGIN.bottom;
+
+      canvas = document.createElement('canvas');
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = canvasW * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = canvasW + 'px';
+      canvas.style.height = height + 'px';
+      wrapper.appendChild(canvas);
+      ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+    }
+
+    function drawBarcode(matchingSet) {
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const height = MARGIN.top + dates.length * STRIP + MARGIN.bottom;
+      ctx.clearRect(0, 0, canvasW, height);
+
+      const xs = h => MARGIN.left + ((h - TIME_MIN) / (TIME_MAX - TIME_MIN)) * innerW;
+
+      ctx.font = '10px "DM Sans", system-ui, sans-serif';
+      ctx.fillStyle = '#5a5870';
+      ctx.textAlign = 'center';
+      for (let h = 20; h <= 33; h++) {
+        const x = xs(h);
+        ctx.fillText(formatHour(h), x, MARGIN.top - 10);
+        ctx.strokeStyle = 'rgba(42, 42, 58, 0.3)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, MARGIN.top - 4);
+        ctx.lineTo(x, height - MARGIN.bottom);
+        ctx.stroke();
+      }
+
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      let lastMonth = null;
+      dates.forEach((date, i) => {
+        const d = new Date(date + 'T12:00:00');
+        const month = d.getMonth();
+        const y = MARGIN.top + i * STRIP + ROW_H / 2;
+        if (month !== lastMonth) {
+          ctx.fillStyle = '#8a889a';
+          ctx.font = '10px "DM Sans", system-ui, sans-serif';
+          ctx.fillText(d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }), MARGIN.left - 10, y);
+          lastMonth = month;
+        }
+      });
+
+      const matchDates = new Set(matchingSet.map(d => d.date));
+
+      dates.forEach((date, i) => {
+        const segs = levelsByDate.get(date);
+        if (!segs) return;
+        const y = MARGIN.top + i * STRIP;
+        const matched = matchDates.has(date);
+        const alpha = matched ? 1.0 : 0.1;
+
+        segs.forEach(seg => {
+          const x1 = xs(Math.max(seg.start, TIME_MIN));
+          const x2 = xs(Math.min(seg.end, TIME_MAX));
+          if (x2 <= x1) return;
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = COLORS[seg.stage] || '#3a3a4a';
+          ctx.fillRect(x1, y, x2 - x1, ROW_H);
+        });
+      });
+      ctx.globalAlpha = 1.0;
+    }
+
+    function updateStats(matching) {
+      const container = document.getElementById('summary-stats');
+      if (!matching.length) {
+        container.innerHTML = `
+          <div class="stat"><div class="stat-value">--</div><div class="stat-label">Avg Sleep</div></div>
+          <div class="stat"><div class="stat-value">--</div><div class="stat-label">Avg Deep</div></div>
+          <div class="stat"><div class="stat-value">--</div><div class="stat-label">Avg REM</div></div>
+          <div class="stat"><div class="stat-value">--</div><div class="stat-label">Avg Efficiency</div></div>
+        `;
+        return;
+      }
+      const avgSleep = d3.mean(matching, d => d.totalSleep);
+      const avgDeep = d3.mean(matching, d => d.deep);
+      const avgRem = d3.mean(matching, d => d.rem);
+      const avgEff = d3.mean(matching, d => d.efficiency);
+
+      container.innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${formatDuration(avgSleep)}</div>
+          <div class="stat-label">Avg Sleep</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${Math.round(avgDeep / 60)}m</div>
+          <div class="stat-label">Avg Deep</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${Math.round(avgRem / 60)}m</div>
+          <div class="stat-label">Avg REM</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${avgEff.toFixed(1)}%</div>
+          <div class="stat-label">Avg Efficiency</div>
+        </div>
+      `;
+    }
+
+    function updateCount(matching) {
+      document.getElementById('match-count').innerHTML = `
+        <span class="big">${matching.length}</span>
+        <span class="of">/</span>
+        <span class="total">${summaryData.length}</span>
+        <div class="label">nights matching</div>
+      `;
+    }
+
+    function updateFilterValues() {
+      FILTERS.forEach(f => {
+        const { lo, hi } = state[f.id];
+        document.getElementById(`val-${f.id}`).textContent = `${f.fmt(lo)} – ${f.fmt(hi)}`;
+        const fill = document.getElementById(`fill-${f.id}`);
+        const range = f.max - f.min;
+        fill.style.left = ((lo - f.min) / range * 100) + '%';
+        fill.style.width = ((hi - lo) / range * 100) + '%';
+      });
+    }
+
+    function update() {
+      updateFilterValues();
+      const matching = getMatching();
+      updateCount(matching);
+      drawBarcode(matching);
+      updateStats(matching);
+    }
+
+    Promise.all([loadData('summary.json'), loadData('levels.json')]).then(([summary, levels]) => {
+      summaryData = summary;
+      levelsData = levels;
+      levelsByDate = d3.group(levels, d => d.date);
+      dates = summary.map(d => d.date).sort();
+
+      buildPresets();
+      buildSliders();
+      initCanvas();
+      makeLegend(document.getElementById('legend'));
+      update();
+
+      let resizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          initCanvas();
+          const matching = getMatching();
+          drawBarcode(matching);
+        }, 150);
+      });
+    });
+  </script>
+</body>
+</html>

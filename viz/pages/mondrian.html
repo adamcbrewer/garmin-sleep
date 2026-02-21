@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mondrian Grid — Sleep Viz</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    .mondrian-wrapper {
+      position: relative;
+    }
+    .mondrian-wrapper canvas {
+      display: block;
+    }
+    .legend-dot.mondrian {
+      border: 1.5px solid #1a1a1a;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script>
+    document.body.innerHTML = pageShell(
+      'Mondrian <em>Grid</em>',
+      'Sleep stages as colored rectangles in a Piet Mondrian composition. Bold black grid lines, flat solid colors, geometric precision — one row per night, one month at a time.',
+      'Data Art'
+    );
+
+    const COLORS = {
+      0: '#1e3a5f',
+      1: '#3a6a9a',
+      2: '#8a3a5a',
+      3: '#8a7a3a',
+    };
+
+    const STAGE_NAMES = { 0: 'Deep', 1: 'Light', 2: 'REM', 3: 'Awake' };
+    const BORDER = 3;
+    const ROW_H = 36;
+    const MARGIN = { top: 0, right: 0, bottom: 0, left: 80 };
+    const TIME_MIN = 19;
+    const TIME_MAX = 34;
+
+    const root = document.getElementById('viz-root');
+    root.innerHTML = `
+      <div class="controls" id="month-controls"></div>
+      <div class="viz-container">
+        <div class="mondrian-wrapper"><div class="loading">Loading sleep data</div></div>
+      </div>
+    `;
+    const container = root.querySelector('.viz-container');
+    const wrapper = root.querySelector('.mondrian-wrapper');
+    const controlsEl = document.getElementById('month-controls');
+
+    Promise.all([loadData('levels.json'), loadData('summary.json')]).then(([levels, summary]) => {
+      const byDate = d3.group(levels, d => d.date);
+      const allDates = summary.map(d => d.date).sort();
+      const months = [...new Set(allDates.map(d => d.slice(0, 7)))].sort();
+
+      months.forEach((m, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'control-btn';
+        btn.textContent = formatMonth(m);
+        btn.dataset.month = m;
+        btn.addEventListener('click', () => selectMonth(m));
+        controlsEl.appendChild(btn);
+      });
+
+      selectMonth(months[months.length - 1]);
+
+      function selectMonth(month) {
+        controlsEl.querySelectorAll('.control-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.month === month);
+        });
+        const dates = allDates.filter(d => d.startsWith(month));
+        draw(dates, byDate);
+      }
+
+      function draw(dates, byDate) {
+        const width = wrapper.clientWidth;
+        const innerW = width - MARGIN.left - MARGIN.right - BORDER * 2;
+        const height = MARGIN.top + dates.length * (ROW_H + BORDER) + BORDER + MARGIN.bottom;
+
+        wrapper.innerHTML = '';
+        const canvas = document.createElement('canvas');
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        wrapper.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(0, 0, width, height);
+
+        const gridLeft = MARGIN.left;
+        const gridRight = width;
+        const gridTop = MARGIN.top;
+        const gridBottom = height;
+
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(gridLeft, gridTop, gridRight - gridLeft, gridBottom - gridTop);
+
+        dates.forEach((date, i) => {
+          const segments = byDate.get(date) || [];
+          const y = gridTop + BORDER + i * (ROW_H + BORDER);
+
+          const dateObj = new Date(date + 'T12:00:00');
+          ctx.fillStyle = '#5a5870';
+          ctx.font = '11px "DM Sans", system-ui, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          const dayLabel = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+          const dowLabel = dateObj.toLocaleDateString('en-GB', { weekday: 'short' });
+          ctx.fillStyle = '#8a889a';
+          ctx.fillText(dayLabel, gridLeft - 10, y + ROW_H / 2 - 6);
+          ctx.fillStyle = '#5a5870';
+          ctx.font = '9px "DM Sans", system-ui, sans-serif';
+          ctx.fillText(dowLabel, gridLeft - 10, y + ROW_H / 2 + 7);
+
+          segments.forEach(seg => {
+            const startClamped = Math.max(seg.start, TIME_MIN);
+            const endClamped = Math.min(seg.end, TIME_MAX);
+            if (endClamped <= startClamped) return;
+
+            const x1 = gridLeft + BORDER + ((startClamped - TIME_MIN) / (TIME_MAX - TIME_MIN)) * innerW;
+            const x2 = gridLeft + BORDER + ((endClamped - TIME_MIN) / (TIME_MAX - TIME_MIN)) * innerW;
+            const blockW = x2 - x1;
+            if (blockW < 0.5) return;
+
+            ctx.fillStyle = COLORS[seg.stage] || '#3a3a4a';
+            ctx.fillRect(x1, y, blockW, ROW_H);
+          });
+        });
+
+        const legendContainer = container.querySelector('.legend');
+        if (legendContainer) legendContainer.remove();
+
+        const legend = document.createElement('div');
+        legend.className = 'legend';
+        [0, 1, 2, 3].forEach(s => {
+          const item = document.createElement('div');
+          item.className = 'legend-item';
+          const dot = document.createElement('span');
+          dot.className = 'legend-dot mondrian';
+          dot.style.background = COLORS[s];
+          item.appendChild(dot);
+          item.appendChild(document.createTextNode(STAGE_NAMES[s]));
+          legend.appendChild(item);
+        });
+        container.appendChild(legend);
+
+        const tip = container.querySelector('.tooltip');
+        if (tip) tip.remove();
+        const tooltip = createTooltip(container);
+
+        canvas.addEventListener('mousemove', (e) => {
+          const rect = canvas.getBoundingClientRect();
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+
+          const rowIndex = Math.floor((my - gridTop - BORDER) / (ROW_H + BORDER));
+          if (rowIndex < 0 || rowIndex >= dates.length || mx < gridLeft + BORDER || mx > gridRight - BORDER) {
+            tooltip.hide();
+            canvas.style.cursor = 'default';
+            return;
+          }
+
+          canvas.style.cursor = 'crosshair';
+          const date = dates[rowIndex];
+          const hour = TIME_MIN + ((mx - gridLeft - BORDER) / innerW) * (TIME_MAX - TIME_MIN);
+          const segments = byDate.get(date) || [];
+          const seg = segments.find(s => hour >= s.start && hour < s.end);
+
+          if (seg) {
+            const dur = seg.end - seg.start;
+            const mins = Math.round(dur * 60);
+            tooltip.show(
+              `<div class="tooltip-label">${formatDateLong(date)}</div>` +
+              `<div class="tooltip-value" style="color:${COLORS[seg.stage]}">${STAGE_NAMES[seg.stage]}</div>` +
+              `<div style="font-size:0.65rem;color:var(--text-dim);margin-top:2px">${formatHour(seg.start)} – ${formatHour(seg.end)} · ${mins}m</div>`,
+              mx, my
+            );
+          } else {
+            tooltip.show(
+              `<div class="tooltip-label">${formatDateLong(date)}</div>` +
+              `<div class="tooltip-value">${formatHour(hour)}</div>`,
+              mx, my
+            );
+          }
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+          tooltip.hide();
+          canvas.style.cursor = 'default';
+        });
+      }
+
+      let resizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          const activeMonth = controlsEl.querySelector('.control-btn.active')?.dataset.month;
+          if (activeMonth) {
+            const dates = allDates.filter(d => d.startsWith(activeMonth));
+            draw(dates, byDate);
+          }
+        }, 150);
+      });
+    });
+
+    function formatMonth(ym) {
+      const [y, m] = ym.split('-');
+      const d = new Date(+y, +m - 1, 1);
+      return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    }
+  </script>
+</body>
+</html>

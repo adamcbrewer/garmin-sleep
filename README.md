@@ -62,7 +62,53 @@ If your Garmin account has MFA enabled, the first login may fail inside Docker s
 2. Complete the MFA prompt
 3. Tokens are saved to `data/.garminconnect/` and will be reused by Docker on subsequent runs
 
-## Exploring the data
+## Visualizations
+
+23 interactive visualization prototypes that render your sleep data in the browser. No build step — just static HTML + JS with D3.
+
+### Preprocessing
+
+The raw JSON files need to be crunched into optimized datasets first:
+
+```bash
+python3 viz/preprocess.py
+```
+
+This reads all files in `data/sleep/` and outputs several JSON files to `viz/data/`:
+
+```
+viz/data/
+├── summary.json      # Per-night stats (48KB)
+├── levels.json       # All sleep stage segments (192KB)
+├── movement.json     # Minute-by-minute movement (1.8MB)
+├── heartrate.json    # HR readings, ~2min intervals (677KB)
+├── stress.json       # Stress readings, ~3min intervals (420KB)
+├── battery.json      # Body battery readings (420KB)
+├── respiration.json  # Respiration readings (745KB)
+├── nights_all.json   # Full detail for every night (4.2MB)
+└── nights_sample.json # 10 representative nights (226KB)
+```
+
+Re-run the preprocessor after fetching new sleep data.
+
+### Viewing
+
+Serve the `viz/` directory with any static HTTP server:
+
+```bash
+cd viz && python3 -m http.server 8080
+```
+
+Then open `http://localhost:8080`. The index page links to all 23 visualizations:
+
+| Category | Visualizations |
+|---|---|
+| **Data Art** | Sleep Barcode, Ridgeline Plot, Movement Topography, Sleep Garden, Tree Rings, Mondrian Grid |
+| **Analytical** | Radial Clock, Horizon Chart, Weekday Fingerprint, Enhanced Hypnogram, Stage Transitions, Sleep Cycle Wave, HR Valley, Body Battery Curve, Weekday Heatmap |
+| **Comparative** | Small Multiples, Scatter Matrix, Stress–Sleep Timeline, Efficiency Waffle, Chronotype Radar |
+| **Interactive** | Night Explorer, Sleep DJ Mixer, Animated Sleep Playback |
+
+## Exploring the raw data
 
 Each JSON file is the raw Garmin API response. Quick ways to poke at it:
 
